@@ -76,3 +76,31 @@ export const DigestConfig = Config.all({
   quietBelowCommits: Config.integer("DIGEST_QUIET_BELOW_COMMITS").pipe(Config.withDefault(3)),
   quietBelowChangedLines: Config.integer("DIGEST_QUIET_BELOW_CHANGED_LINES").pipe(Config.withDefault(50))
 })
+
+/**
+ * How a Draft is written. The model is named here and nowhere else: which model
+ * wrote a Draft is a question a User can ask of the answer (#31), and comparing
+ * two models has to be a deployment change rather than an edit.
+ *
+ * The attempt bounds belong to the Draft rather than to the provider, because
+ * the failure they exist for is not the provider's fault: a model that answers
+ * with reasoning and no content has returned a perfectly good HTTP 200.
+ */
+export const DraftConfig = Config.all({
+  model: Config.string("DRAFT_MODEL").pipe(Config.withDefault("moonshotai/kimi-k3")),
+  /** Total attempts, not retries. Five is the spec's ceiling for a transient failure. */
+  maxAttempts: Config.integer("DRAFT_MAX_ATTEMPTS").pipe(Config.withDefault(5)),
+  /** The first backoff; each attempt doubles it, with jitter. */
+  retryBaseDelay: Config.duration("DRAFT_RETRY_BASE_DELAY").pipe(Config.withDefault(Duration.seconds(2)))
+})
+
+/**
+ * Where the model is reached. Provider-specific and deliberately separate from
+ * `DraftConfig`: application code depends on the provider-agnostic language
+ * model tag, and only the composition of the drafts module ever reads this.
+ * Swapping OpenRouter for something else changes this block and one layer.
+ */
+export const ModelProviderConfig = Config.all({
+  apiKey: Config.redacted("OPENROUTER_API_KEY"),
+  apiUrl: Config.string("OPENROUTER_API_URL").pipe(Config.withDefault("https://openrouter.ai/api/v1"))
+})

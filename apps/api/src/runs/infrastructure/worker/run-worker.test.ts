@@ -12,6 +12,7 @@ import { PgRepoConnectionRepositoryLive } from "../../../connections/infrastruct
 import { PgUserRepositoryLive } from "../../../connections/infrastructure/persistence/pg-user-repository.ts"
 import { MigrationsLive } from "../../../database/index.ts"
 import { collectDigestOver, emptyRepoActivitySource } from "../../../digests/testing/fake-repo-activity.ts"
+import { passableDraftStage } from "../../../drafts/testing/fake-draft-writer.ts"
 import { ProcessNextRun } from "../../application/process-next-run.ts"
 import { RequeueInterruptedRuns } from "../../application/requeue-interrupted-runs.ts"
 import { makeDayWindow } from "../../domain/day-window.ts"
@@ -55,7 +56,7 @@ const worker = () =>
     Layer.provide(Layer.mergeAll(ProcessNextRun.Default, RequeueInterruptedRuns.Default)),
     // Real collect stage, fixture Forge: the lifecycle is the subject, but a
     // Run the worker picks up still has to be able to finish.
-    Layer.provide(collectDigestOver(emptyRepoActivitySource)),
+    Layer.provide(Layer.mergeAll(collectDigestOver(emptyRepoActivitySource), passableDraftStage)),
     Layer.provide(PgJobQueueLive),
     Layer.provide(TestConfig)
   )

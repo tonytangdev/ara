@@ -13,6 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@effect/ai": "^0.37.0",
+    "@effect/ai-openrouter": "^0.12.0",
     "@effect/experimental": "^0.61.1",
     "@effect/platform": "^0.97.1",
     "@effect/platform-node": "^0.108.1",

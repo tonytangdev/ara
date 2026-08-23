@@ -14,6 +14,12 @@ importers:
 
   apps/api:
     dependencies:
+      '@effect/ai':
+        specifier: ^0.37.0
+        version: 0.37.0(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(effect@3.22.1)
+      '@effect/ai-openrouter':
+        specifier: ^0.12.0
+        version: 0.12.0(@effect/ai@0.37.0(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(effect@3.22.1))(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1)
       '@effect/experimental':
         specifier: ^0.61.1
         version: 0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1)
@@ -106,6 +112,22 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
+
+  '@effect/ai-openrouter@0.12.0':
+    resolution: {integrity: sha512-0CIfrvm6BLfQEqocfNLaVc0+bAdMal+TuBXY52Z1UrvHjFm4Kt1BGApQeRwFNgWshCZMu6+Vc4XhKqvO7gRRxQ==}
+    peerDependencies:
+      '@effect/ai': ^0.37.0
+      '@effect/experimental': ^0.61.0
+      '@effect/platform': ^0.97.0
+      effect: ^3.22.0
+
+  '@effect/ai@0.37.0':
+    resolution: {integrity: sha512-tHkDg/p2tNxKhXZATOokl5vGGqrV7K5FA/qdIExRTjFUOEVvKCWoVxqtUuj+NAp9BeSVuysJMPrHB9XjFPsUiQ==}
+    peerDependencies:
+      '@effect/experimental': ^0.61.0
+      '@effect/platform': ^0.97.0
+      '@effect/rpc': ^0.76.0
+      effect: ^3.22.0
 
   '@effect/cluster@0.60.2':
     resolution: {integrity: sha512-GEODN5kvFJ0L0XSkANcS8s6lfhjrrA8x/ezYUV/lXerqCHf5xo3ZTPUanGMHu5Byvikng0mZDcyNvke2sGjfSQ==}
@@ -1586,6 +1608,21 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.5.10':
     optional: true
+
+  '@effect/ai-openrouter@0.12.0(@effect/ai@0.37.0(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(effect@3.22.1))(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1)':
+    dependencies:
+      '@effect/ai': 0.37.0(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(effect@3.22.1)
+      '@effect/experimental': 0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1)
+      '@effect/platform': 0.97.1(effect@3.22.1)
+      effect: 3.22.1
+
+  '@effect/ai@0.37.0(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(effect@3.22.1)':
+    dependencies:
+      '@effect/experimental': 0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1)
+      '@effect/platform': 0.97.1(effect@3.22.1)
+      '@effect/rpc': 0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1)
+      effect: 3.22.1
+      find-my-way-ts: 0.1.6
 
   '@effect/cluster@0.60.2(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/sql@0.52.1(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/workflow@0.19.1(@effect/experimental@0.61.1(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(@effect/platform@0.97.1(effect@3.22.1))(@effect/rpc@0.76.2(@effect/platform@0.97.1(effect@3.22.1))(effect@3.22.1))(effect@3.22.1))(effect@3.22.1)':
     dependencies:

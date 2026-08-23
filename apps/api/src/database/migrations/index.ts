@@ -5,6 +5,7 @@ import usersAndSessions from "./0002_users_and_sessions.ts"
 import repoConnections from "./0003_repo_connections.ts"
 import runs from "./0004_runs.ts"
 import digests from "./0005_digests.ts"
+import drafts from "./0006_drafts.ts"
 
 /**
  * Every migration, in order. Keys are `<id>_<name>`; ids must be unique and
@@ -16,5 +17,6 @@ export const migrations: Record<string, Effect.Effect<void, unknown, SqlClient.S
   "0002_users_and_sessions": usersAndSessions,
   "0003_repo_connections": repoConnections,
   "0004_runs": runs,
-  "0005_digests": digests
+  "0005_digests": digests,
+  "0006_drafts": drafts
 }

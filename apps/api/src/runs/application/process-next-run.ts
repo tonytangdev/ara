@@ -1,5 +1,6 @@
 import { Cause, Effect, Option } from "effect"
 import { CollectDigest } from "../../digests/index.ts"
+import { WriteDraft } from "../../drafts/index.ts"
 import { JobQueue } from "../domain/ports/job-queue.ts"
 import type { Run } from "../domain/run.ts"
 
@@ -21,16 +22,24 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
   effect: Effect.gen(function* () {
     const queue = yield* JobQueue
     const collectDigest = yield* CollectDigest
+    const writeDraft = yield* WriteDraft
 
     /**
      * The pipeline: two stages with a persisted Digest between them (ADR-0002),
      * each one visible to a User polling the Run.
      *
-     * Collecting is real. Writing a Draft (#7) still replaces the second body.
+     * Each stage is handed the facts it needs rather than the Run itself: the
+     * digests module answers "what happened in this repository, that day" and
+     * the drafts module answers "write the post for this Run's Digest", and
+     * neither owes the runs module anything beyond that.
      *
-     * The collect stage is handed the facts it needs rather than the Run
-     * itself: the digests module answers "what happened in this repository,
-     * that day", and owes the runs module nothing beyond that.
+     * The Draft stage reads the Digest the collect stage persisted rather than
+     * being passed it, which is what makes the boundary real: a Run reclaimed
+     * after a deploy starts the second stage from storage, and regenerating a
+     * Draft later (#11) takes the same path without a Forge call.
+     *
+     * The Quiet Day path — a light day getting a short, honest Draft instead of
+     * a full one — is #8.
      */
     const collect = (run: Run) =>
       collectDigest.execute({
@@ -41,8 +50,7 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
         dayWindow: run.dayWindow
       })
 
-    const draft = (run: Run) =>
-      Effect.logDebug("Writing a Draft (stubbed)").pipe(Effect.annotateLogs({ runId: run.id }))
+    const draft = (run: Run) => writeDraft.execute({ runId: run.id, userId: run.userId })
 
     const process = (run: Run) =>
       Effect.gen(function* () {
@@ -60,15 +68,25 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
           })
         )
       }).pipe(
-        // The one failure that already knows how to explain itself: the
-        // repository could not be read, and why is something the User can
-        // usually act on. It is told to them rather than logged at them.
-        Effect.catchTag("ActivityUnavailable", (failure) =>
-          Effect.logWarning("Run failed to collect Activity").pipe(
-            Effect.annotateLogs({ runId: run.id, reason: failure.reason }),
-            Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
-          )
-        ),
+        // The failures that already know how to explain themselves: the
+        // repository could not be read, or the model wrote nothing. Why is
+        // something the User can usually act on, so it is told to them rather
+        // than logged at them.
+        Effect.catchTags({
+          ActivityUnavailable: (failure) =>
+            Effect.logWarning("Run failed to collect Activity").pipe(
+              Effect.annotateLogs({ runId: run.id, reason: failure.reason }),
+              Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
+            ),
+          // The model gave nothing usable, and by the time it reaches here the
+          // retryable ones have already been retried. A Run fails without a
+          // Draft rather than succeeding with an empty one.
+          DraftUnavailable: (failure) =>
+            Effect.logWarning("Run failed to write a Draft").pipe(
+              Effect.annotateLogs({ runId: run.id, reason: failure.reason, retryable: failure.retryable }),
+              Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
+            )
+        }),
         // A Run that blows up has to stop being in flight, or it is unclaimable
         // and unexplainable at once. What a User is told about the rest is
         // still thin here; #12 is where a failure learns to explain itself.

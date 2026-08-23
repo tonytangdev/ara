@@ -1,0 +1,118 @@
+import { Effect, Option, Schedule } from "effect"
+import { DraftConfig } from "../../config.ts"
+import type { UserId } from "../../connections/domain/user.ts"
+import { DigestRepository } from "../../digests/domain/ports/digest-repository.ts"
+import type { RunId } from "../../runs/domain/run.ts"
+import { isBlank, type StoredDraft, wordCount } from "../domain/draft.ts"
+import { DraftRepository } from "../domain/ports/draft-repository.ts"
+import { DraftUnavailable, DraftWriter } from "../domain/ports/draft-writer.ts"
+
+/**
+ * Which Run to write for. Not the `Run` itself: the drafts module answers
+ * "write the post for this Run's Digest", and owes the runs module nothing
+ * beyond that.
+ */
+export interface WriteDraftRequest {
+  readonly runId: RunId
+  readonly userId: UserId
+}
+
+/**
+ * Driving (inbound) port: the Draft stage of a Run.
+ *
+ * Read the Digest that was persisted at the end of the collect stage, write
+ * prose from it, persist that. The Forge is not touched here at all — that is
+ * the point of the boundary in ADR-0002, and it is what makes regenerating a
+ * Draft (#11) cost one model call and nothing else.
+ *
+ * Two rules are enforced above the port rather than inside any one adapter,
+ * because they have to hold whichever model is behind it:
+ *
+ * - A Run that already has a Draft is left alone. A deploy that interrupts a
+ *   Run hands it back to the queue, and processing it again must not buy a
+ *   second model call or leave a second Draft.
+ * - Blank prose is never persisted. The model sometimes answers with reasoning
+ *   and no message content, which is not an HTTP error and which a naive
+ *   pipeline would happily store as an empty Draft. It is a retryable failure,
+ *   and it is retried here.
+ */
+export class WriteDraft extends Effect.Service<WriteDraft>()("application/drafts/WriteDraft", {
+  effect: Effect.gen(function* () {
+    const { maxAttempts, retryBaseDelay } = yield* DraftConfig
+    const digests = yield* DigestRepository
+    const writer = yield* DraftWriter
+    const drafts = yield* DraftRepository
+
+    /**
+     * Exponential with jitter, bounded. Jitter matters because several Runs
+     * that hit the same rate limit would otherwise come back in step and hit
+     * it together again.
+     */
+    const retryPolicy = Schedule.exponential(retryBaseDelay).pipe(
+      Schedule.jittered,
+      Schedule.intersect(Schedule.recurs(Math.max(maxAttempts - 1, 0)))
+    )
+
+    const write = (digest: Parameters<typeof writer.writeDraft>[0]["digest"]) =>
+      writer.writeDraft({ digest }).pipe(
+        Effect.flatMap((written) =>
+          // The easy one to miss: a response that carried reasoning and no
+          // message content. Nothing failed on the wire, so this is the only
+          // place it can be caught before it becomes an empty Draft.
+          isBlank(written.body)
+            ? Effect.fail(
+                new DraftUnavailable({
+                  reason: "The model answered without writing anything.",
+                  retryable: true
+                })
+              )
+            : Effect.succeed(written)
+        ),
+        Effect.retry({ schedule: retryPolicy, while: (failure: DraftUnavailable) => failure.retryable })
+      )
+
+    const execute = (request: WriteDraftRequest): Effect.Effect<StoredDraft, DraftUnavailable> =>
+      Effect.gen(function* () {
+        const existing = yield* drafts.latestForRun(request.runId, request.userId)
+
+        if (Option.isSome(existing)) {
+          yield* Effect.logInfo("Run already has a Draft").pipe(
+            Effect.annotateLogs({ runId: request.runId, draftId: existing.value.id })
+          )
+          return existing.value
+        }
+
+        const stored = yield* Effect.flatMap(
+          digests.findForRun(request.runId, request.userId),
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new DraftUnavailable({
+                  reason: "There is nothing to write from: this Run collected no Digest.",
+                  retryable: false
+                })
+              ),
+            onSome: Effect.succeed
+          })
+        )
+
+        const written = yield* write(stored.digest)
+        const draft = yield* drafts.save(request.runId, request.userId, stored.id, written)
+
+        yield* Effect.logInfo("Wrote a Draft").pipe(
+          Effect.annotateLogs({
+            runId: request.runId,
+            draftId: draft.id,
+            digestId: stored.id,
+            model: draft.model,
+            words: wordCount(draft.body),
+            totalTokens: draft.totalTokens
+          })
+        )
+
+        return draft
+      })
+
+    return { execute } as const
+  })
+}) {}

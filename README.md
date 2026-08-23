@@ -30,6 +30,13 @@ A Run reads the day's Activity from GitHub, builds a Digest of what actually
 happened — commit subjects, file paths and line counts, never diffs — and stores
 it. `GET /v1/runs/:id/digest` is what that Run decided.
 
+It then writes a Draft from that Digest alone, and nothing else: no source code
+is ever sent to a language model (`docs/adr/0004-no-diffs-in-the-digest.md`).
+`GET /v1/runs/:id/draft` is the post, in markdown, with the model that wrote it
+and what it cost attached. Set `OPENROUTER_API_KEY` before asking for a Run;
+`DRAFT_MODEL` decides which model answers, and neither the use cases nor the
+tests know or care which one it is.
+
 Scripts at the root fan out to every workspace package: `pnpm build`, `pnpm dev`,
 `pnpm test`, `pnpm lint`, `pnpm typecheck`.
 

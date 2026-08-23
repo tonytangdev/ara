@@ -136,6 +136,26 @@ identity and let go of the connection.
 Local development needs a real GitHub App and a callback URL that reaches your
 machine. See `.env.example` for the four values it wants.
 
+## Writing a Draft
+
+The second stage of a Run reads the Digest the first stage persisted and writes
+prose from it ([ADR-0002](../../docs/adr/0002-digest-draft-split.md)). It never
+goes back to the Forge, which is what makes regenerating a Draft cheap, and it
+is given the Digest and nothing else — no source code reaches a language model
+([ADR-0004](../../docs/adr/0004-no-diffs-in-the-digest.md)).
+
+The model sits behind the `DraftWriter` port. The adapter above it knows
+`@effect/ai`'s provider-agnostic `LanguageModel` tag and nothing about any
+provider; `drafts/infrastructure/ai/openrouter.ts` is the only file that names
+one, and both which model and where to reach it are configuration. Application
+tests provide a scripted `DraftWriter` and never make a real model call.
+
+One rule the module exists to keep: a response can be a perfectly good HTTP 200
+carrying reasoning and **no message content**. The prototype saw it once in
+twenty-four calls. It is caught at the adapter, again before anything is
+persisted, and refused a third time by a `check` constraint on the table — a
+Run fails without a Draft rather than succeeding with an empty one.
+
 The OpenAPI document is derived from the endpoint schemas, so documenting a new
 route means annotating it in the module's `api.ts` — nothing to keep in sync.
 Scalar's script is inlined from `@effect/platform`, so the page loads offline.
@@ -172,6 +192,11 @@ pnpm typecheck
 | `SESSION_LIFETIME`  | `30 days`   | How long a session lasts         |
 | `SESSION_SECURE_COOKIES` | `true` | `Secure` on the session cookie  |
 | `AFTER_SIGN_IN_URL` | `/v1/me`    | Where sign-in sends the browser  |
+| `OPENROUTER_API_KEY` | _required_ | Where the model is reached      |
+| `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1` | The provider's base URL |
+| `DRAFT_MODEL`       | `moonshotai/kimi-k3` | Which model writes a Draft |
+| `DRAFT_MAX_ATTEMPTS` | `5`        | Attempts before a Draft gives up |
+| `DRAFT_RETRY_BASE_DELAY` | `2 seconds` | First backoff; doubles with jitter |
 
 The credentials have no defaults on purpose: an unconfigured deployment should
 fail to boot rather than quietly try a well-known password. `pnpm dev` and

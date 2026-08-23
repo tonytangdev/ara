@@ -40,7 +40,17 @@ import { PgRepoConnectionRepositoryLive } from "../../../connections/infrastruct
 import { PgSessionStoreLive } from "../../../connections/infrastructure/persistence/pg-session-store.ts"
 import { PgUserRepositoryLive } from "../../../connections/infrastructure/persistence/pg-user-repository.ts"
 import { MigrationsLive } from "../../../database/index.ts"
-import { passableDraftStage } from "../../../drafts/testing/fake-draft-writer.ts"
+import { DigestsApiGroup } from "../../../digests/api.ts"
+import { DescribeDigest } from "../../../digests/application/describe-digest.ts"
+import {
+  CommitActivity,
+  FileChange,
+  PullRequestActivity,
+  RepositoryActivity
+} from "../../../digests/domain/activity.ts"
+import { DigestsHandlersLive } from "../../../digests/infrastructure/http/digests-handlers.ts"
+import { PgDigestRepositoryLive } from "../../../digests/infrastructure/persistence/pg-digest-repository.ts"
+import { collectDigestOver, repoActivitySourceOf } from "../../../digests/testing/fake-repo-activity.ts"
 import { RequestLogger } from "../../../http/logging.ts"
 import { RunsApiGroup } from "../../../runs/api.ts"
 import { DescribeRun } from "../../../runs/application/describe-run.ts"
@@ -50,22 +60,22 @@ import { RequestRun } from "../../../runs/application/request-run.ts"
 import { RunsHandlersLive } from "../../../runs/infrastructure/http/runs-handlers.ts"
 import { PgJobQueueLive } from "../../../runs/infrastructure/persistence/pg-job-queue.ts"
 import { PgRunRepositoryLive } from "../../../runs/infrastructure/persistence/pg-run-repository.ts"
-import { DigestsApiGroup } from "../../api.ts"
-import { DescribeDigest } from "../../application/describe-digest.ts"
-import { CommitActivity, FileChange, PullRequestActivity, RepositoryActivity } from "../../domain/activity.ts"
-import { PgDigestRepositoryLive } from "../../infrastructure/persistence/pg-digest-repository.ts"
-import { collectDigestOver, repoActivitySourceOf } from "../../testing/fake-repo-activity.ts"
-import { DigestsHandlersLive } from "./digests-handlers.ts"
+import { DraftsApiGroup } from "../../api.ts"
+import { DescribeDraft } from "../../application/describe-draft.ts"
+import { DraftUnavailable } from "../../domain/ports/draft-writer.ts"
+import { PgDraftRepositoryLive } from "../../infrastructure/persistence/pg-draft-repository.ts"
+import { draftWriterAnswering, type ScriptedAnswer, writeDraftOver } from "../../testing/fake-draft-writer.ts"
+import { DraftsHandlersLive } from "./drafts-handlers.ts"
 
 /**
  * What these tests drive: the whole feature, from asking for a Run to reading
- * what Ara decided happened that day — over HTTP, through real use cases, the
- * real session middleware, a real Postgres and the real collect stage. Only the
- * Forge is faked, at the port ADR-0003 puts it behind.
+ * the post Ara wrote — over HTTP, through real use cases, the real session
+ * middleware, a real Postgres and both real stages of the pipeline. Only the
+ * two driven adapters are faked: the Forge, and the model.
  *
- * The filtering is asserted again here, on purpose. It is covered exhaustively
- * where it lives, in `build-digest.test.ts`; what this proves is that the path
- * a User actually walks is the path that applies it.
+ * No test here makes a real model call. Draft quality is not a unit test; what
+ * these hold is that a Run produces a Draft its owner can read, that an empty
+ * answer never becomes one, and that nobody else can see it.
  */
 
 const OCTOCAT_CODE = "octocat-code"
@@ -104,30 +114,23 @@ const reachableByInstallation: Record<string, ReadonlyArray<ReachableRepository>
 
 const file = (path: string, additions: number, deletions: number) => new FileChange({ path, additions, deletions })
 
-const commit = (
-  sha: string,
-  subject: string,
-  files: ReadonlyArray<FileChange>,
-  extra: { readonly author?: string; readonly parents?: number } = {}
-) =>
+const commit = (sha: string, subject: string, files: ReadonlyArray<FileChange>) =>
   new CommitActivity({
     sha,
     subject,
     committedAt: DateTime.unsafeMake("2026-08-22T10:00:00.000Z"),
-    authorLogin: extra.author ?? "octocat",
+    authorLogin: "octocat",
     authorIsBot: false,
-    parentCount: extra.parents ?? 1,
+    parentCount: 1,
     files
   })
 
-/** A day with real work in it, and every kind of noise a Digest is meant to drop. */
+/** A day with enough in it to carry a full Draft. */
 const A_BUSY_DAY = {
   commits: [
-    commit("aaa", "Add the collect stage", [file("src/digests/collect.ts", 80, 4), file("README.md", 3, 1)]),
+    commit("aaa", "Add the collect stage", [file("src/digests/collect.ts", 80, 4)]),
     commit("bbb", "Test the collect stage", [file("src/digests/collect.test.ts", 120, 0)]),
-    commit("ccc", "Bump lodash", [file("pnpm-lock.yaml", 900, 800)], { author: "dependabot[bot]" }),
-    commit("ddd", "Merge branch 'main'", [file("src/digests/collect.ts", 400, 400)], { parents: 2 }),
-    commit("eee", "pnpm install", [file("pnpm-lock.yaml", 40, 20)])
+    commit("ccc", "Write the Draft stage", [file("src/drafts/write-draft.ts", 90, 2)])
   ],
   pullRequests: [
     new PullRequestActivity({
@@ -136,16 +139,16 @@ const A_BUSY_DAY = {
       kind: "merged",
       authorLogin: "octocat",
       authorIsBot: false
-    }),
-    new PullRequestActivity({
-      number: 7,
-      title: "Bump lodash from 4.17.20 to 4.17.21",
-      kind: "opened",
-      authorLogin: "dependabot[bot]",
-      authorIsBot: true
     })
   ]
 } as const
+
+const FIRST_DRAFT =
+  "Spent the day finishing the collect stage and starting on the one that writes. " +
+  "The split is holding up: reading a day out of GitHub and writing about it are now two " +
+  "separate problems, and only one of them costs money."
+
+const SECOND_DRAFT = "A different take on the same day."
 
 let container: StartedPostgreSqlContainer
 
@@ -162,7 +165,10 @@ const TestConfig = Layer.setConfigProvider(
     new Map([
       ["CREDENTIAL_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64")],
       ["SESSION_SECURE_COOKIES", "false"],
-      ["AFTER_SIGN_IN_URL", "/v1/me"]
+      ["AFTER_SIGN_IN_URL", "/v1/me"],
+      // The backoff is real behaviour and is asserted on; waiting out the real
+      // one would only be asserting that the clock works.
+      ["DRAFT_RETRY_BASE_DELAY", "1 millis"]
     ])
   )
 )
@@ -211,20 +217,22 @@ const fakeReachableRepositories = Layer.succeed(
 )
 
 /** The Forge, answering from a fixture: the same Activity for whatever is asked. */
-const forgeReporting = (activity: {
-  readonly commits: ReadonlyArray<CommitActivity>
-  readonly pullRequests: ReadonlyArray<PullRequestActivity>
-}) =>
-  repoActivitySourceOf(
-    ({ dayWindow, repository }) =>
-      new RepositoryActivity({ repository, dayWindow, commits: activity.commits, pullRequests: activity.pullRequests })
-  )
+const forgeReporting = repoActivitySourceOf(
+  ({ dayWindow, repository }) =>
+    new RepositoryActivity({
+      repository,
+      dayWindow,
+      commits: A_BUSY_DAY.commits,
+      pullRequests: A_BUSY_DAY.pullRequests
+    })
+)
 
 const TestApi = HttpApi.make("ara")
   .add(ConnectionsApiGroup)
   .add(RepoConnectionsApiGroup)
   .add(RunsApiGroup)
   .add(DigestsApiGroup)
+  .add(DraftsApiGroup)
 
 const DrivenLive = Layer.mergeAll(
   fakeGithub,
@@ -236,18 +244,24 @@ const DrivenLive = Layer.mergeAll(
   PgJobQueueLive,
   PgRunRepositoryLive,
   PgDigestRepositoryLive,
+  PgDraftRepositoryLive,
   PgForgeCredentialStoreLive.pipe(Layer.provide(SecretCipher.Default))
 )
 
-const server = (forge: ReturnType<typeof forgeReporting>) =>
+/** The whole application, with a model that answers from a script. */
+const server = (answers: ReadonlyArray<ScriptedAnswer>) =>
   Layer.suspend(() => {
-    const stages = Layer.mergeAll(collectDigestOver(forge), passableDraftStage)
+    const stages = Layer.mergeAll(
+      collectDigestOver(forgeReporting),
+      writeDraftOver(draftWriterAnswering(answers)).pipe(Layer.provide(TestConfig))
+    )
 
     const UnderTest = Layer.mergeAll(
       ConnectionsHandlersLive,
       RepoConnectionsHandlersLive,
       RunsHandlersLive,
-      DigestsHandlersLive
+      DigestsHandlersLive,
+      DraftsHandlersLive
     ).pipe(
       Layer.provideMerge(SessionAuthenticationLive),
       Layer.provideMerge(ProcessNextRun.Default.pipe(Layer.provide(stages))),
@@ -259,6 +273,7 @@ const server = (forge: ReturnType<typeof forgeReporting>) =>
           ConnectRepository.Default,
           DescribeCurrentUser.Default,
           DescribeDigest.Default,
+          DescribeDraft.Default,
           DescribeRun.Default,
           DisconnectRepository.Default,
           ListReachableRepositories.Default,
@@ -322,19 +337,15 @@ interface RunBody {
   readonly failureReason: string | null
 }
 
-interface DigestBody {
+interface DraftBody {
   readonly id: string
   readonly runId: string
-  readonly owner: string
-  readonly name: string
-  readonly day: string
-  readonly commitCount: number
-  readonly commits: ReadonlyArray<{ readonly subject: string; readonly files: ReadonlyArray<string> }>
-  readonly pullRequests: ReadonlyArray<{ readonly number: number; readonly kind: string }>
-  readonly totals: { readonly filesTouched: number; readonly additions: number; readonly deletions: number }
-  readonly topAreas: ReadonlyArray<{ readonly dir: string; readonly churn: number }>
-  readonly topFiles: ReadonlyArray<{ readonly path: string }>
-  readonly isQuiet: boolean
+  readonly digestId: string
+  readonly body: string
+  readonly model: string
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly totalTokens: number | null
 }
 
 const post = (session: string | undefined, path: string, body: unknown) =>
@@ -355,7 +366,7 @@ const workUntilEmpty = Effect.gen(function* () {
   }
 })
 
-/** Signed in, installed, one repository connected, one Run asked for and finished. */
+/** Signed in, installed, one repository connected, one Run asked for. */
 const runFor = (day: string) =>
   Effect.gen(function* () {
     const session = yield* arrive(OCTOCAT_CODE, OCTOCAT_INSTALLATION)
@@ -372,8 +383,14 @@ const runFor = (day: string) =>
     return { session, connectionId: connection.id, run }
   })
 
-describe("Reading the Digest a Run collected", () => {
-  it.live("turns a day of Activity into the record Ara will write from", () =>
+const draftsFor = (runId: string) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql<{ readonly count: string }>`select count(*)::text as count from drafts where run_id = ${runId}`
+  )
+
+describe("Reading the Draft a Run wrote", () => {
+  it.live("takes a day of Activity all the way to a post the User can read", () =>
     Effect.gen(function* () {
       const { run, session } = yield* runFor("2026-08-22")
       yield* workUntilEmpty
@@ -381,42 +398,35 @@ describe("Reading the Digest a Run collected", () => {
       const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
       assert.strictEqual(finished.state, "succeeded")
 
-      const response = yield* get(session, `/v1/runs/${run.id}/digest`)
+      const response = yield* get(session, `/v1/runs/${run.id}/draft`)
       assert.strictEqual(response.status, 200)
-      const digest = (yield* response.json) as DigestBody
+      const draft = (yield* response.json) as DraftBody
 
-      assert.strictEqual(digest.runId, run.id)
-      assert.strictEqual(digest.owner, "octocat")
-      assert.strictEqual(digest.name, "ara")
-      assert.strictEqual(digest.day, "2026-08-22")
+      assert.strictEqual(draft.runId, run.id)
+      assert.strictEqual(draft.body, FIRST_DRAFT)
 
-      // The bot commit, the merge and the lockfile-only commit are gone, and so
-      // are the 2,560 lines they would have brought with them.
-      assert.strictEqual(digest.commitCount, 2)
-      assert.deepStrictEqual(
-        digest.commits.map((entry) => entry.subject),
-        ["Add the collect stage", "Test the collect stage"]
-      )
-      assert.deepStrictEqual({ ...digest.totals }, { filesTouched: 3, additions: 203, deletions: 5 })
-      assert.deepStrictEqual(
-        digest.topAreas.map((area) => area.dir),
-        ["src/digests", "(root)"]
-      )
-      assert.strictEqual(digest.topFiles[0]?.path, "src/digests/collect.test.ts")
-      assert.deepStrictEqual(
-        digest.pullRequests.map((pull) => [pull.number, pull.kind]),
-        [[6, "merged"]]
-      )
-      assert.isFalse(digest.isQuiet)
-    }).pipe(Effect.provide(server(forgeReporting(A_BUSY_DAY))))
+      // Which model wrote it and what it cost travel with the Draft, because
+      // both are questions asked of it later.
+      assert.strictEqual(draft.model, "fake/scripted")
+      assert.strictEqual(draft.inputTokens, 1_200)
+      assert.strictEqual(draft.outputTokens, 300)
+      assert.strictEqual(draft.totalTokens, 1_500)
+
+      // It points back at the Digest it was written from, which is what makes
+      // "why did it write that?" answerable.
+      const digest = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/digest`), (r) => r.json)) as {
+        readonly id: string
+      }
+      assert.strictEqual(draft.digestId, digest.id)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
   )
 
   it.live("has nothing to show before the Run has been worked on", () =>
     Effect.gen(function* () {
       const { run, session } = yield* runFor("2026-08-22")
 
-      assert.strictEqual((yield* get(session, `/v1/runs/${run.id}/digest`)).status, 404)
-    }).pipe(Effect.provide(server(forgeReporting(A_BUSY_DAY))))
+      assert.strictEqual((yield* get(session, `/v1/runs/${run.id}/draft`)).status, 404)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
   )
 
   it.live("is invisible to everybody but its owner", () =>
@@ -426,74 +436,96 @@ describe("Reading the Digest a Run collected", () => {
 
       const stranger = yield* arrive(HUBOT_CODE, HUBOT_INSTALLATION)
 
-      const refused = yield* get(stranger, `/v1/runs/${run.id}/digest`)
-      const unknown = yield* get(stranger, "/v1/runs/00000000-0000-4000-8000-000000000000/digest")
+      const refused = yield* get(stranger, `/v1/runs/${run.id}/draft`)
+      const unknown = yield* get(stranger, "/v1/runs/00000000-0000-4000-8000-000000000000/draft")
 
       assert.strictEqual(refused.status, 404)
       assert.strictEqual(unknown.status, 404)
       // The same answer either way: the 404 confirmed nothing.
       assert.deepStrictEqual(yield* refused.json, yield* unknown.json)
 
-      assert.strictEqual((yield* get(undefined, `/v1/runs/${run.id}/digest`)).status, 401)
-    }).pipe(Effect.provide(server(forgeReporting(A_BUSY_DAY))))
+      assert.strictEqual((yield* get(undefined, `/v1/runs/${run.id}/draft`)).status, 401)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
   )
 
-  it.live("collects the same Run twice into one Digest", () =>
+  it.live("writes one Draft however many times the Run is claimed", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       const { run, session } = yield* runFor("2026-08-22")
       yield* workUntilEmpty
 
       // What a deploy interrupting a Run leaves behind, and what the next boot
-      // hands back to the queue. Processing it again must not leave two.
+      // hands back to the queue. Processing it again must not buy a second
+      // model call or leave a second Draft.
       yield* sql`update runs set state = 'queued', finished_at = null where id = ${run.id}`
       yield* workUntilEmpty
 
-      const rows = yield* sql<{ readonly count: string }>`
-        select count(*)::text as count from digests where run_id = ${run.id}
-      `
-      assert.strictEqual(rows[0]?.count, "1")
+      assert.strictEqual((yield* draftsFor(run.id))[0]?.count, "1")
 
-      const digest = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/digest`), (r) => r.json)) as DigestBody
-      assert.strictEqual(digest.commitCount, 2)
-    }).pipe(Effect.provide(server(forgeReporting(A_BUSY_DAY))))
+      const draft = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/draft`), (r) => r.json)) as DraftBody
+      // The second answer in the script was never reached.
+      assert.strictEqual(draft.body, FIRST_DRAFT)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }])))
   )
 })
 
-describe("A Day Window with no Activity at all", () => {
-  it.live("produces a Digest, not a failure", () =>
+/**
+ * The rule from the prototype, at the seam a User actually walks.
+ *
+ * A model that answers with reasoning and no message content has not failed on
+ * the wire. The whole risk is that the pipeline treats that as a Draft, and
+ * these are the tests that say it does not.
+ */
+describe("A model that answers with nothing", () => {
+  it.live("fails the Run rather than storing an empty Draft", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+
+      const failed = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
+      assert.strictEqual(failed.state, "failed")
+      assert.isNotNull(failed.failureReason)
+
+      assert.strictEqual((yield* get(session, `/v1/runs/${run.id}/draft`)).status, 404)
+      assert.strictEqual((yield* draftsFor(run.id))[0]?.count, "0")
+
+      // The Digest survives: the expensive half of the Run was already done and
+      // the Draft stage is what failed (ADR-0002).
+      assert.strictEqual((yield* get(session, `/v1/runs/${run.id}/digest`)).status, 200)
+    }).pipe(Effect.provide(server([{ body: "" }])))
+  )
+
+  it.live("tries again, and keeps the post it eventually gets", () =>
     Effect.gen(function* () {
       const { run, session } = yield* runFor("2026-08-22")
       yield* workUntilEmpty
 
       const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
       assert.strictEqual(finished.state, "succeeded")
-      assert.isNull(finished.failureReason)
 
-      const digest = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/digest`), (r) => r.json)) as DigestBody
-      assert.strictEqual(digest.commitCount, 0)
-      assert.deepStrictEqual({ ...digest.totals }, { filesTouched: 0, additions: 0, deletions: 0 })
-      assert.deepStrictEqual([...digest.commits], [])
-      assert.deepStrictEqual([...digest.topAreas], [])
-      assert.isTrue(digest.isQuiet)
-    }).pipe(Effect.provide(server(forgeReporting({ commits: [], pullRequests: [] }))))
+      const draft = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/draft`), (r) => r.json)) as DraftBody
+      assert.strictEqual(draft.body, FIRST_DRAFT)
+      assert.strictEqual((yield* draftsFor(run.id))[0]?.count, "1")
+      // Whitespace is no more content than nothing at all.
+    }).pipe(Effect.provide(server([{ body: "" }, { body: "   " }, { body: FIRST_DRAFT }])))
   )
-})
 
-describe("A repository Ara can no longer read", () => {
-  it.live("fails the Run with something the User can act on", () =>
+  it.live("stops immediately when trying again cannot help", () =>
     Effect.gen(function* () {
-      const http = yield* HttpClient.HttpClient
-      const { connectionId, run, session } = yield* runFor("2026-08-22")
-
-      yield* HttpClientRequest.del(`/v1/repo-connections/${connectionId}`).pipe(asSignedIn(session), http.execute)
+      const { run, session } = yield* runFor("2026-08-22")
       yield* workUntilEmpty
 
       const failed = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
       assert.strictEqual(failed.state, "failed")
-      assert.include(failed.failureReason ?? "", "octocat/ara")
-
-      assert.strictEqual((yield* get(session, `/v1/runs/${run.id}/digest`)).status, 404)
-    }).pipe(Effect.provide(server(forgeReporting(A_BUSY_DAY))))
+      assert.include(failed.failureReason ?? "", "refused the key")
+      assert.strictEqual((yield* draftsFor(run.id))[0]?.count, "0")
+    }).pipe(
+      Effect.provide(
+        server([
+          { fails: new DraftUnavailable({ reason: "The provider refused the key.", retryable: false }) },
+          { body: FIRST_DRAFT }
+        ])
+      )
+    )
   )
 })
