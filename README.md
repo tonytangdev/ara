@@ -5,6 +5,7 @@ pnpm monorepo.
 ## Layout
 
 - `apps/*` — deployable applications
+  - `apps/api` — Effect TS HTTP API (hexagonal architecture)
 - `packages/*` — shared libraries
 
 ## Getting started
