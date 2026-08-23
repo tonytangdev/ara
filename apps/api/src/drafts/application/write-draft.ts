@@ -14,15 +14,28 @@ import { DraftUnavailable, DraftWriter } from "../domain/ports/draft-writer.ts"
 export interface WriteDraftRequest {
   readonly runId: RunId
   readonly userId: UserId
+  /**
+   * Which Digest to write from, when it is not the one this Run collected.
+   *
+   * Set on a regeneration, where the Digest belongs to an earlier Run and the
+   * Forge is never reached (#11). Null — or absent — is the ordinary case: the
+   * Digest this Run persisted at the end of its collect stage.
+   */
+  readonly digestId?: string | null
 }
 
 /**
  * Driving (inbound) port: the Draft stage of a Run.
  *
- * Read the Digest that was persisted at the end of the collect stage, write
- * prose from it, persist that. The Forge is not touched here at all — that is
- * the point of the boundary in ADR-0002, and it is what makes regenerating a
- * Draft (#11) cost one model call and nothing else.
+ * Read a Digest that has already been persisted, write prose from it, persist
+ * that. The Forge is not touched here at all — that is the point of the
+ * boundary in ADR-0002, and it is what makes regenerating a Draft cost one
+ * model call and nothing else.
+ *
+ * Regeneration is not a second path through here, it is the same one with a
+ * different Digest named: a Run that carries `digestId` writes from the Digest
+ * an earlier Run collected, and everything below — the blank-prose rule, what
+ * is persisted, what is logged — is identical.
  *
  * Two rules are enforced above the port rather than inside any one adapter,
  * because they have to hold whichever model is behind it:
@@ -75,8 +88,16 @@ export class WriteDraft extends Effect.Service<WriteDraft>()("application/drafts
           return existing.value
         }
 
+        // Regenerating writes from a Digest an earlier Run collected, so the
+        // lookup is by Digest and not by Run. Either way it carries the owning
+        // User, so no Run can be pointed at somebody else's Digest.
+        const held =
+          request.digestId === undefined || request.digestId === null
+            ? digests.findForRun(request.runId, request.userId)
+            : digests.findOwnedBy(request.digestId, request.userId)
+
         const stored = yield* Effect.flatMap(
-          digests.findForRun(request.runId, request.userId),
+          held,
           Option.match({
             onNone: () =>
               Effect.fail(

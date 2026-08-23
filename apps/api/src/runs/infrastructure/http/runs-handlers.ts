@@ -4,32 +4,11 @@ import { NoSuchRepoConnection } from "../../../connections/api.ts"
 import { CurrentUser } from "../../../connections/domain/current-user.ts"
 import type { RepoConnectionId } from "../../../connections/domain/repo-connection.ts"
 import { AraApi } from "../../../http/api.ts"
-import { NoSuchRun, RunResponse, UnusableDayWindow } from "../../api.ts"
+import { NoSuchRun, runResponse, UnusableDayWindow } from "../../api.ts"
 import { DescribeRun } from "../../application/describe-run.ts"
 import { ListRuns } from "../../application/list-runs.ts"
 import { RequestRun } from "../../application/request-run.ts"
-import type { Run, RunId } from "../../domain/run.ts"
-
-const toResponse = (run: Run) =>
-  new RunResponse({
-    id: run.id,
-    state: run.state,
-    trigger: run.trigger,
-    forge: run.repository.forge,
-    owner: run.repository.owner,
-    name: run.repository.name,
-    repoConnectionId: run.repoConnectionId,
-    day: run.dayWindow.day,
-    timeZone: run.dayWindow.timeZone,
-    windowStartsAt: run.dayWindow.startsAt,
-    windowEndsAt: run.dayWindow.endsAt,
-    attempts: run.attempts,
-    cost: run.cost,
-    failureReason: run.failureReason,
-    requestedAt: run.requestedAt,
-    startedAt: run.startedAt,
-    finishedAt: run.finishedAt
-  })
+import type { RunId } from "../../domain/run.ts"
 
 /**
  * Driving (inbound) adapter for Runs.
@@ -57,7 +36,7 @@ export const RunsHandlersLive = HttpApiBuilder.group(AraApi, "runs", (handlers) 
           })
         )
 
-        return toResponse(run)
+        return runResponse(run)
       })
     )
     .handle("read", ({ path }) =>
@@ -69,7 +48,7 @@ export const RunsHandlersLive = HttpApiBuilder.group(AraApi, "runs", (handlers) 
           .execute(user, path.id as RunId)
           .pipe(Effect.mapError(() => new NoSuchRun({ message: "No such Run" })))
 
-        return toResponse(run)
+        return runResponse(run)
       })
     )
     .handle("list", () =>
@@ -77,7 +56,7 @@ export const RunsHandlersLive = HttpApiBuilder.group(AraApi, "runs", (handlers) 
         const user = yield* CurrentUser
         const list = yield* ListRuns
 
-        return (yield* list.execute(user)).map(toResponse)
+        return (yield* list.execute(user)).map(runResponse)
       })
     )
 )

@@ -74,6 +74,15 @@ export const PgDigestRepositoryLive = Layer.effect(
         Effect.orDie
       )
 
-    return DigestRepository.of({ save, findForRun })
+    const findOwnedBy = (id: string, userId: UserId) =>
+      sql<DigestRow>`
+        select id, run_id, content, collected_at from digests
+        where id = ${id} and user_id = ${userId}
+      `.pipe(
+        Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toStoredDigest(rows[0])))),
+        Effect.orDie
+      )
+
+    return DigestRepository.of({ save, findForRun, findOwnedBy })
   })
 )

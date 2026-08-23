@@ -48,6 +48,10 @@ export type Trigger = typeof Trigger.Type
  * `attempts` counts claims rather than failures: a Run interrupted by a deploy
  * is claimed again, which is what makes an interrupted deploy recoverable and
  * why processing has to be idempotent.
+ *
+ * `sourceDigestId` is what makes a Run a regeneration: the day it is about has
+ * already been collected, so it starts at the Draft stage and never reads the
+ * Forge (ADR-0002). Null is the ordinary case — collect the day, then write.
  */
 export class Run extends Schema.Class<Run>("Run")({
   id: RunId,
@@ -58,6 +62,12 @@ export class Run extends Schema.Class<Run>("Run")({
   trigger: Trigger,
   state: RunState,
   attempts: Schema.Int,
+  /**
+   * The Digest this Run must write from, when it is not going to collect one.
+   * Set only on a regeneration, which is why `isRegeneration` reads it rather
+   * than a flag of its own: there is one fact here, not two that can disagree.
+   */
+  sourceDigestId: Schema.NullOr(Schema.UUID),
   failureReason: Schema.NullOr(Schema.String),
   /**
    * What the Run spent, once it has spent anything. Null until the model has
@@ -71,6 +81,22 @@ export class Run extends Schema.Class<Run>("Run")({
 }) {
   get isFinished(): boolean {
     return isTerminal(this.state)
+  }
+
+  /**
+   * Whether this Run writes from a Digest somebody else's Run collected.
+   *
+   * The one thing that follows from it is the stage it starts at, and that is
+   * the point: a regeneration is an ordinary Run with the expensive half
+   * already done, not a second kind of Run with a lifecycle of its own.
+   */
+  get isRegeneration(): boolean {
+    return this.sourceDigestId !== null
+  }
+
+  /** Where this Run's first attempt begins. A collected day is one it need not read again. */
+  get startsAt(): "collecting" | "drafting" {
+    return this.isRegeneration ? "drafting" : "collecting"
   }
 }
 

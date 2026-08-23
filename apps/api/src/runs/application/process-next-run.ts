@@ -79,7 +79,7 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
      * it.
      */
     const draft = (run: Run) =>
-      writeDraft.execute({ runId: run.id, userId: run.userId }).pipe(
+      writeDraft.execute({ runId: run.id, userId: run.userId, digestId: run.sourceDigestId }).pipe(
         Effect.tap((written) =>
           queue.recordCost(
             run.id,
@@ -202,7 +202,13 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
       // its own attempt number — including the ones a crash and a requeue made
       // in an earlier process. A Run that has been picked up and dropped five
       // times has had its five attempts wherever they happened.
-      return go("collecting", run.attempts)
+      //
+      // Where it starts is the Run's own answer: a regeneration carries the
+      // Digest it writes from, so it begins at the Draft stage and the collect
+      // stage is not skipped so much as absent. That is the whole cost of the
+      // feature — the Forge is not reached because there is no code path here
+      // that could reach it, rather than because something remembered not to.
+      return go(run.startsAt, run.attempts)
     }
 
     const execute: Effect.Effect<Option.Option<Run>> = Effect.gen(function* () {

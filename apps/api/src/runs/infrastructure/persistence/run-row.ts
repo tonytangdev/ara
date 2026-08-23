@@ -15,6 +15,7 @@ export interface RunRow {
   readonly trigger: string
   readonly state: string
   readonly attempts: number
+  readonly source_digest_id: string | null
   readonly failure_reason: string | null
   readonly input_tokens: number | null
   readonly output_tokens: number | null
@@ -42,7 +43,8 @@ export const runColumns = (sql: SqlClient.SqlClient, prefix = "") => {
   return sql`
     ${at("id")}, ${at("user_id")}, ${at("repo_connection_id")}, ${at("forge")}, ${at("owner")}, ${at("name")},
     to_char(${at("day")}, 'YYYY-MM-DD') as day, ${at("time_zone")}, ${at("trigger")}, ${at("state")},
-    ${at("attempts")}, ${at("failure_reason")}, ${at("requested_at")}, ${at("started_at")}, ${at("finished_at")},
+    ${at("attempts")}, ${at("source_digest_id")}, ${at("failure_reason")},
+    ${at("requested_at")}, ${at("started_at")}, ${at("finished_at")},
     ${at("input_tokens")}, ${at("output_tokens")}, ${at("reasoning_tokens")}, ${at("total_tokens")}, ${at("cost_usd")}
   `
 }
@@ -78,6 +80,7 @@ export const toRun = (row: RunRow) =>
     trigger: row.trigger,
     state: row.state,
     attempts: row.attempts,
+    sourceDigestId: row.source_digest_id,
     failureReason: row.failure_reason,
     cost: toCost(row),
     requestedAt: row.requested_at.toISOString(),

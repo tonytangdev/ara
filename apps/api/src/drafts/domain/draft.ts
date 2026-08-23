@@ -140,6 +140,18 @@ export class StoredDraft extends Schema.Class<StoredDraft>("StoredDraft")({
 export class DraftNotFound extends Schema.TaggedError<DraftNotFound>()("DraftNotFound", {}) {}
 
 /**
+ * This Draft has been through a human, and nobody said to write over it.
+ *
+ * Regeneration never destroys anything — the earlier Draft and the edit on it
+ * are kept, so a User can go back to the version they preferred (user story
+ * 20) — but it does move the Draft the day now leads to, and a rewrite the User
+ * spent time on is not something to supersede because a button was easy to
+ * reach. So the confirmation is asked for once, explicitly, and only ever when
+ * there is human work to lose sight of.
+ */
+export class DraftEditNotConfirmed extends Schema.TaggedError<DraftEditNotConfirmed>()("DraftEditNotConfirmed", {}) {}
+
+/**
  * How many Drafts one page of the list carries.
  *
  * The ceiling is the load-bearing half: Drafts accumulate one per Run forever,

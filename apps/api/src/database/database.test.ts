@@ -66,7 +66,8 @@ describe("Postgres", () => {
           "digests",
           "drafts",
           "draft_edits",
-          "run_and_draft_cost"
+          "run_and_draft_cost",
+          "regenerated_drafts"
         ]
       )
 

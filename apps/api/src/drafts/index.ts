@@ -1,9 +1,11 @@
 import { FetchHttpClient } from "@effect/platform"
 import { Layer } from "effect"
 import { PgDigestRepositoryLive } from "../digests/infrastructure/persistence/pg-digest-repository.ts"
+import { PgJobQueueLive } from "../runs/infrastructure/persistence/pg-job-queue.ts"
 import { DescribeDraft } from "./application/describe-draft.ts"
 import { EditDraft } from "./application/edit-draft.ts"
 import { ListDrafts } from "./application/list-drafts.ts"
+import { RegenerateDraft } from "./application/regenerate-draft.ts"
 import { WriteDraft } from "./application/write-draft.ts"
 import { LanguageModelDraftWriterLive } from "./infrastructure/ai/language-model-draft-writer.ts"
 import { OpenRouterLanguageModelLive } from "./infrastructure/ai/openrouter.ts"
@@ -32,10 +34,16 @@ const DraftWriterLive = LanguageModelDraftWriterLive.pipe(
  * Draft needs a database and nothing else, while writing one needs a model.
  * `SqlClient` is left as a requirement, so the composition root decides which
  * Postgres the module reads and writes.
+ *
+ * Regenerating is on the HTTP side rather than the writing side, and it needs
+ * no model here for the same reason it needs no Forge: it puts a Run on the
+ * queue and answers, and the worker is what writes. Sharing the queue adapter
+ * with the runs module is what layer memoization is for — one Postgres, one
+ * pool, one set of Runs.
  */
 export const DraftsLive = DraftsHandlersLive.pipe(
-  Layer.provide(Layer.mergeAll(DescribeDraft.Default, EditDraft.Default, ListDrafts.Default)),
-  Layer.provide(PgDraftRepositoryLive)
+  Layer.provide(Layer.mergeAll(DescribeDraft.Default, EditDraft.Default, ListDrafts.Default, RegenerateDraft.Default)),
+  Layer.provide(Layer.mergeAll(PgDraftRepositoryLive, PgJobQueueLive))
 )
 
 /** The Draft stage: read the persisted Digest, write prose from it, persist that. */
@@ -49,7 +57,9 @@ export {
   DraftSummaryResponse,
   DraftsApiGroup,
   EditDraftRequest,
-  NoSuchDraft
+  NoSuchDraft,
+  RegenerateDraftRequest,
+  UnconfirmedEdit
 } from "./api.ts"
 export { WriteDraft } from "./application/write-draft.ts"
 export { DraftShape, DraftSummary, QUIET_DRAFT_WORDS, StoredDraft, WrittenDraft } from "./domain/draft.ts"

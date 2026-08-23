@@ -14,6 +14,21 @@ export interface RunRequest {
 }
 
 /**
+ * Everything needed to ask for the same day to be written about again.
+ *
+ * The repository and the Day Window are pointedly absent: they are facts about
+ * the Run being regenerated, and re-stating them here would be inviting a
+ * regeneration to be about a different day than the Digest it writes from.
+ */
+export interface RegenerationRequest {
+  readonly userId: UserId
+  /** The Run whose day this is. What the new Run inherits its repository and Day Window from. */
+  readonly sourceRunId: RunId
+  /** The Digest to write from. Already collected, which is why no Forge is touched. */
+  readonly digestId: string
+}
+
+/**
  * Driven (outbound) port: enqueue and claim Runs. Backed by Postgres per
  * ADR-0001, which is why the vocabulary here is deliberately queue-shaped and
  * says nothing about tables.
@@ -33,6 +48,16 @@ export class JobQueue extends Context.Tag("domain/runs/JobQueue")<
      * button should not buy two model calls.
      */
     readonly enqueue: (request: RunRequest) => Effect.Effect<Run>
+    /**
+     * Enqueue a Run that writes from a Digest that already exists, or answer
+     * with the regeneration already in flight for that Digest.
+     *
+     * Separate from `enqueue` because the two are deduplicated on different
+     * things — a day, and a Digest — and because this one takes no Repo
+     * Connection: regeneration reads nothing from the Forge, so it works just
+     * as well for a repository the User has since disconnected.
+     */
+    readonly enqueueRegeneration: (request: RegenerationRequest) => Effect.Effect<Run>
     /** The next queued Run, now marked as being worked on, or none if the queue is empty. */
     readonly claim: Effect.Effect<Option.Option<Run>>
     /** Move a claimed Run between the pipeline's stages. */

@@ -20,5 +20,11 @@ export class DigestRepository extends Context.Tag("domain/digests/DigestReposito
   {
     readonly save: (runId: RunId, userId: UserId, digest: Digest) => Effect.Effect<StoredDigest>
     readonly findForRun: (runId: RunId, userId: UserId) => Effect.Effect<Option.Option<StoredDigest>>
+    /**
+     * One Digest by its own id. What regenerating a Draft writes from: the Run
+     * doing the writing is not the Run that collected it, so "the Digest for
+     * this Run" is the wrong question to ask (ADR-0002).
+     */
+    readonly findOwnedBy: (id: string, userId: UserId) => Effect.Effect<Option.Option<StoredDigest>>
   }
 >() {}

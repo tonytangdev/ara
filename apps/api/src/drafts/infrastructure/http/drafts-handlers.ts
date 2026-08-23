@@ -2,11 +2,13 @@ import { HttpApiBuilder } from "@effect/platform"
 import { Effect, Option, Schema } from "effect"
 import { CurrentUser } from "../../../connections/domain/current-user.ts"
 import { AraApi } from "../../../http/api.ts"
+import { runResponse } from "../../../runs/api.ts"
 import type { RunId } from "../../../runs/domain/run.ts"
-import { DraftPageResponse, DraftResponse, DraftSummaryResponse, NoSuchDraft } from "../../api.ts"
+import { DraftPageResponse, DraftResponse, DraftSummaryResponse, NoSuchDraft, UnconfirmedEdit } from "../../api.ts"
 import { DescribeDraft } from "../../application/describe-draft.ts"
 import { EditDraft } from "../../application/edit-draft.ts"
 import { ListDrafts } from "../../application/list-drafts.ts"
+import { RegenerateDraft } from "../../application/regenerate-draft.ts"
 import {
   type DraftCursor,
   DraftCursorFromString,
@@ -116,6 +118,26 @@ export const DraftsHandlersLive = HttpApiBuilder.group(AraApi, "drafts", (handle
           .pipe(Effect.mapError(() => new NoSuchDraft({ message: "No such Draft" })))
 
         return toResponse(draft)
+      })
+    )
+    .handle("regenerate", ({ path, payload }) =>
+      Effect.gen(function* () {
+        const user = yield* CurrentUser
+        const regenerate = yield* RegenerateDraft
+
+        const run = yield* regenerate.execute(user, path.id as DraftId, { discardEdit: payload.discardEdit }).pipe(
+          Effect.catchTags({
+            DraftNotFound: () => new NoSuchDraft({ message: "No such Draft" }),
+            DraftEditNotConfirmed: () =>
+              new UnconfirmedEdit({
+                message:
+                  "This Draft has your own edit on it. Ask again with discardEdit set to true to write a new one; " +
+                  "the edited Draft is kept either way."
+              })
+          })
+        )
+
+        return runResponse(run)
       })
     )
 )

@@ -48,6 +48,7 @@ const queuedRun = new Run({
   trigger: "user",
   state: "queued",
   attempts: 0,
+  sourceDigestId: null,
   failureReason: null,
   cost: null,
   requestedAt: SOMETIME,
@@ -65,14 +66,19 @@ const jobQueueOver = (state: Ref.Ref<Run>) =>
     JobQueue,
     JobQueue.of({
       enqueue: () => Ref.get(state),
-      claim: Ref.modify(state, (run) =>
-        run.state === "queued"
-          ? [
-              Option.some(new Run({ ...run, state: "collecting", attempts: run.attempts + 1, startedAt: SOMETIME })),
-              new Run({ ...run, state: "collecting", attempts: run.attempts + 1, startedAt: SOMETIME })
-            ]
-          : [Option.none(), run]
-      ),
+      enqueueRegeneration: () => Ref.get(state),
+      claim: Ref.modify(state, (run) => {
+        // The same claim the Postgres adapter makes, including where it puts a
+        // Run: one that already holds a Digest has nothing to collect.
+        const claimed = new Run({
+          ...run,
+          state: run.startsAt,
+          attempts: run.attempts + 1,
+          startedAt: SOMETIME
+        })
+
+        return run.state === "queued" ? [Option.some(claimed), claimed] : [Option.none(), run]
+      }),
       advance: (_id, next: RunState) => Ref.update(state, (run) => new Run({ ...run, state: next })),
       recordAttempt: (_id, resumeAt: RunState) =>
         Ref.modify(state, (run) => {
@@ -337,6 +343,90 @@ describe("A Run that breaks rather than fails", () => {
       assert.strictEqual(run.state, "failed")
       assert.strictEqual(run.attempts, 5)
       assert.include(run.failureReason ?? "", "Something went wrong inside Ara")
+    })
+  )
+})
+
+/**
+ * Regeneration, at the level where the promise is actually kept.
+ *
+ * "One model call, zero Forge calls" is a claim about the pipeline, so it is
+ * tested by making the collect stage impossible to touch without the test
+ * failing loudly, rather than by counting calls and trusting the count.
+ */
+describe("A Run that writes from a Digest already collected", () => {
+  it.effect("never reaches the collect stage at all", () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(new Run({ ...queuedRun, sourceDigestId: aDigest.id }))
+
+      const working = yield* Effect.fork(
+        Effect.flatMap(ProcessNextRun, (processNextRun) => processNextRun.execute).pipe(
+          Effect.provide(
+            ProcessNextRun.Default.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  // Reading the Forge is not slow here, or rate limited, or
+                  // unavailable: it is a hole in the floor. A regeneration that
+                  // stepped on it would fail the Run, and this test with it.
+                  Layer.succeed(
+                    CollectDigest,
+                    CollectDigest.make({ execute: () => Effect.dieMessage("regeneration read the Forge") })
+                  ),
+                  draftingBy(["works"]),
+                  jobQueueOver(state)
+                )
+              ),
+              Layer.provide(TestConfig)
+            )
+          )
+        )
+      )
+
+      yield* TestClock.adjust("1 hour")
+      yield* Fiber.join(working)
+
+      const run = yield* Ref.get(state)
+      assert.strictEqual(run.state, "succeeded")
+      // One attempt: it did not fail into a retry and quietly recover either.
+      assert.strictEqual(run.attempts, 1)
+      assert.isNull(run.failureReason)
+    })
+  )
+
+  it.effect("is retried by the Run's own policy, and by nothing nested inside it", () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(new Run({ ...queuedRun, sourceDigestId: aDigest.id }))
+
+      const working = yield* Effect.fork(
+        Effect.flatMap(ProcessNextRun, (processNextRun) => processNextRun.execute).pipe(
+          Effect.provide(
+            ProcessNextRun.Default.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(
+                    CollectDigest,
+                    CollectDigest.make({ execute: () => Effect.dieMessage("regeneration read the Forge") })
+                  ),
+                  // The model answers with nothing, then with prose: the
+                  // null-content rule, on the regeneration path.
+                  draftingBy([wroteNothing, "works"]),
+                  jobQueueOver(state)
+                )
+              ),
+              Layer.provide(TestConfig)
+            )
+          )
+        )
+      )
+
+      yield* TestClock.adjust("1 hour")
+      yield* Fiber.join(working)
+
+      const run = yield* Ref.get(state)
+      assert.strictEqual(run.state, "succeeded")
+      // Two attempts, counted on the Run: the retry was the Run lifecycle's
+      // single policy (#12) and not a second loop hidden in the Draft stage.
+      assert.strictEqual(run.attempts, 2)
     })
   )
 })

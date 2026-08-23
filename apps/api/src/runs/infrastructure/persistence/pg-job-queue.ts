@@ -1,6 +1,6 @@
 import { SqlClient } from "@effect/sql"
 import { DateTime, Effect, Layer } from "effect"
-import { JobQueue, type RunRequest } from "../../domain/ports/job-queue.ts"
+import { JobQueue, type RegenerationRequest, type RunRequest } from "../../domain/ports/job-queue.ts"
 import { IN_FLIGHT_STATES, type RunId, type RunOutcome, type RunState } from "../../domain/run.ts"
 import type { RunCost } from "../../domain/run-cost.ts"
 import { type RunRow, runColumns, toRun } from "./run-row.ts"
@@ -78,6 +78,49 @@ export const PgJobQueueLive = Layer.effect(
         Effect.orDie
       )
 
+    const regenerationInFlightFor = (request: RegenerationRequest) =>
+      sql<RunRow>`
+        select ${columns} from runs
+        where user_id = ${request.userId}
+          and source_digest_id = ${request.digestId}
+          and ${sql.in("state", IN_FLIGHT_STATES)}
+        limit 1
+      `
+
+    /**
+     * The new Run is copied out of the one it regenerates rather than described
+     * again by the caller, so the repository and the Day Window cannot come
+     * adrift from the Digest it writes from. `user_id` in the `where` clause is
+     * what makes regenerating somebody else's Run match no row.
+     */
+    const enqueueRegeneration = (request: RegenerationRequest) =>
+      sql<RunRow>`
+        insert into runs (
+          user_id, repo_connection_id, forge, owner, name,
+          day, time_zone, window_starts_at, window_ends_at, trigger, source_digest_id
+        )
+        select
+          user_id, repo_connection_id, forge, owner, name,
+          day, time_zone, window_starts_at, window_ends_at, 'user', ${request.digestId}
+        from runs
+        where id = ${request.sourceRunId} and user_id = ${request.userId}
+        on conflict do nothing
+        returning ${columns}
+      `.pipe(
+        // No row back means the index refused it: this User is already having
+        // this Digest written again, and that Run is the honest answer.
+        Effect.flatMap((inserted) =>
+          inserted.length > 0 ? Effect.succeed(inserted) : regenerationInFlightFor(request)
+        ),
+        Effect.flatMap((rows) =>
+          rows[0] === undefined ? Effect.dieMessage("regenerating a Draft returned no Run") : toRun(rows[0])
+        ),
+        Effect.orDie
+      )
+
+    // A Run that already holds a Digest is claimed straight into `drafting`:
+    // there is nothing to collect, and a User polling it should be told what is
+    // actually happening rather than watching a stage that will not run.
     const claim = sql<RunRow>`
       with claimed as (
         select id from runs
@@ -87,7 +130,9 @@ export const PgJobQueueLive = Layer.effect(
         limit 1
       )
       update runs
-      set state = 'collecting', attempts = attempts + 1, started_at = now()
+      set state = case when runs.source_digest_id is null then 'collecting' else 'drafting' end,
+          attempts = attempts + 1,
+          started_at = now()
       from claimed
       where runs.id = claimed.id
       returning ${runsColumns}
@@ -147,6 +192,15 @@ export const PgJobQueueLive = Layer.effect(
       Effect.orDie
     )
 
-    return JobQueue.of({ enqueue, claim, advance, recordAttempt, complete, recordCost, requeueInterrupted })
+    return JobQueue.of({
+      enqueue,
+      enqueueRegeneration,
+      claim,
+      advance,
+      recordAttempt,
+      complete,
+      recordCost,
+      requeueInterrupted
+    })
   })
 )

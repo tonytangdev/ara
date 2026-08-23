@@ -4,7 +4,7 @@ import { SqlClient } from "@effect/sql"
 import { PgClient } from "@effect/sql-pg"
 import { assert, describe, it } from "@effect/vitest"
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql"
-import { ConfigProvider, DateTime, Effect, Layer, Option, Redacted } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer, Option, Redacted, Ref } from "effect"
 import { afterAll, beforeAll, beforeEach } from "vitest"
 import {
   ConnectionsApiGroup,
@@ -48,7 +48,7 @@ import {
   PullRequestActivity,
   RepositoryActivity
 } from "../../../digests/domain/activity.ts"
-import type { RepoActivitySource } from "../../../digests/domain/ports/repo-activity-source.ts"
+import { RepoActivitySource } from "../../../digests/domain/ports/repo-activity-source.ts"
 import { DigestsHandlersLive } from "../../../digests/infrastructure/http/digests-handlers.ts"
 import { PgDigestRepositoryLive } from "../../../digests/infrastructure/persistence/pg-digest-repository.ts"
 import {
@@ -69,6 +69,7 @@ import { DraftsApiGroup } from "../../api.ts"
 import { DescribeDraft } from "../../application/describe-draft.ts"
 import { EditDraft } from "../../application/edit-draft.ts"
 import { ListDrafts } from "../../application/list-drafts.ts"
+import { RegenerateDraft } from "../../application/regenerate-draft.ts"
 import { DraftUnavailable } from "../../domain/ports/draft-writer.ts"
 import { PgDraftRepositoryLive } from "../../infrastructure/persistence/pg-draft-repository.ts"
 import { draftWriterAnswering, type ScriptedAnswer, writeDraftOver } from "../../testing/fake-draft-writer.ts"
@@ -330,6 +331,7 @@ const server = (answers: ReadonlyArray<ScriptedAnswer>, forge: Layer.Layer<RepoA
           ListDrafts.Default,
           ListRepoConnections.Default,
           ListRuns.Default,
+          RegenerateDraft.Default,
           RecordGithubInstallation.Default,
           RequestRun.Default,
           SetTimeZone.Default
@@ -983,5 +985,206 @@ describe("A quiet day", () => {
       assert.strictEqual(digest.commitCount, 0)
       assert.deepStrictEqual([...digest.commits], [])
     }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }], emptyRepoActivitySource)))
+  )
+})
+
+/**
+ * A Forge that answers one day's Activity and is a hole in the floor after that.
+ *
+ * This is what makes "regeneration makes no Forge calls" a test rather than a
+ * claim. A second read does not return an empty day or a polite failure — it is
+ * a defect, which fails the Run it happens in and, through the assertions
+ * below, the test. Nothing has to remember to count calls.
+ */
+const forgeAnsweringOnce = Layer.effect(
+  RepoActivitySource,
+  Effect.map(Ref.make(0), (calls) =>
+    RepoActivitySource.of({
+      activityFor: ({ dayWindow, repository }) =>
+        Effect.flatMap(
+          Ref.updateAndGet(calls, (made) => made + 1),
+          (made) =>
+            made > 1
+              ? Effect.dieMessage("regeneration read the Forge")
+              : Effect.succeed(
+                  new RepositoryActivity({
+                    repository,
+                    dayWindow,
+                    commits: A_BUSY_DAY.commits,
+                    pullRequests: A_BUSY_DAY.pullRequests
+                  })
+                )
+        )
+    })
+  )
+)
+
+const regenerate = (session: string | undefined, draftId: string, body: unknown = {}) =>
+  post(session, `/v1/drafts/${draftId}/regenerate`, body)
+
+/** The Draft a Run wrote, once the queue has been drained. */
+const draftOfRun = (session: string | undefined, runId: string) =>
+  Effect.flatMap(get(session, `/v1/runs/${runId}/draft`), (response) => response.json) as Effect.Effect<
+    DraftBody,
+    never,
+    HttpClient.HttpClient
+  >
+
+/**
+ * The payoff of ADR-0002, at the seam a User actually walks.
+ *
+ * A User who does not like a Draft asks for another one and pays for one model
+ * call and nothing else, because the expensive half of the Run — the read of
+ * the Forge — is already sitting in a Digest. These are the tests that hold
+ * that promise to the letter, and that hold the two things regeneration must
+ * not cost: somebody else's Drafts, and a User's own words.
+ */
+describe("Regenerating a Draft from its Digest", () => {
+  it.live("writes a new one from the stored Digest, and touches no Forge doing it", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+
+      const first = yield* draftOfRun(session, run.id)
+      assert.strictEqual(first.body, FIRST_DRAFT)
+
+      const response = yield* regenerate(session, first.id)
+      // 202 and a Run: the model has not been called yet.
+      assert.strictEqual(response.status, 202)
+      const again = (yield* response.json) as RunBody & { readonly sourceDigestId: string | null }
+
+      // A Run of its own, pointed at the Digest the first one collected.
+      assert.notStrictEqual(again.id, run.id)
+      assert.strictEqual(again.sourceDigestId, first.digestId)
+
+      yield* workUntilEmpty
+
+      const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${again.id}`), (r) => r.json)) as RunBody
+      assert.strictEqual(finished.state, "succeeded")
+
+      // The new version, readable through the Run that wrote it.
+      const second = yield* draftOfRun(session, again.id)
+      assert.strictEqual(second.body, SECOND_DRAFT)
+      assert.notStrictEqual(second.id, first.id)
+      // Written from the same Digest: the day was never read again, and the
+      // second post is about the same day as the first.
+      assert.strictEqual(second.digestId, first.digestId)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }], forgeAnsweringOnce)))
+  )
+
+  it.live("keeps the Draft it was asked to replace", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+      const first = yield* draftOfRun(session, run.id)
+
+      yield* regenerate(session, first.id)
+      yield* workUntilEmpty
+
+      // Still there, in full, and still the Draft its own Run points at: a User
+      // who preferred the first take can go back to it (user story 20).
+      const kept = (yield* Effect.flatMap(get(session, `/v1/drafts/${first.id}`), (r) => r.json)) as DraftBody
+      assert.strictEqual(kept.body, FIRST_DRAFT)
+      assert.strictEqual((yield* draftOfRun(session, run.id)).body, FIRST_DRAFT)
+
+      // And both are in the list, newest first.
+      const page = yield* listDrafts(session)
+      assert.strictEqual(page.items.length, 2)
+      assert.isTrue(page.items.some((draft) => draft.id === first.id))
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }], forgeAnsweringOnce)))
+  )
+
+  it.live("costs one model call however many times the button is clicked", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+      const first = yield* draftOfRun(session, run.id)
+
+      const once = (yield* Effect.flatMap(regenerate(session, first.id), (r) => r.json)) as RunBody
+      const twice = (yield* Effect.flatMap(regenerate(session, first.id), (r) => r.json)) as RunBody
+
+      // The second ask is answered with the Run already in flight, exactly as
+      // asking twice for the same day is (user story 11).
+      assert.strictEqual(twice.id, once.id)
+
+      yield* workUntilEmpty
+      assert.strictEqual((yield* listDrafts(session)).items.length, 2)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }], forgeAnsweringOnce)))
+  )
+
+  it.live("obeys the null-content rule, and retries on the Run's own policy", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+      const first = yield* draftOfRun(session, run.id)
+
+      const again = (yield* Effect.flatMap(regenerate(session, first.id), (r) => r.json)) as RunBody
+      yield* workUntilEmpty
+
+      // The model answered with nothing, which is not prose and never becomes a
+      // Draft. The Run tried again — one policy, the Run's — and kept what it
+      // got the second time.
+      const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${again.id}`), (r) => r.json)) as RunBody
+      assert.strictEqual(finished.state, "succeeded")
+      assert.strictEqual((yield* draftsFor(again.id))[0]?.count, "1")
+      assert.strictEqual((yield* draftOfRun(session, again.id)).body, SECOND_DRAFT)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: "" }, { body: SECOND_DRAFT }], forgeAnsweringOnce)))
+  )
+
+  it.live("will not write past a User's own words unless they say so", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+      const first = yield* draftOfRun(session, run.id)
+
+      yield* patch(session, `/v1/drafts/${first.id}`, { body: MY_OWN_WORDS })
+
+      const refused = yield* regenerate(session, first.id)
+      // Not a bad request: repeating it with the confirmation is exactly what
+      // the client should do next.
+      assert.strictEqual(refused.status, 409)
+
+      // Nothing was enqueued and nothing was spent: the Run list is as it was.
+      const runs = (yield* Effect.flatMap(get(session, "/v1/runs"), (r) => r.json)) as ReadonlyArray<RunBody>
+      assert.strictEqual(runs.length, 1)
+
+      const confirmed = yield* regenerate(session, first.id, { discardEdit: true })
+      assert.strictEqual(confirmed.status, 202)
+      yield* workUntilEmpty
+
+      const again = (yield* confirmed.json) as RunBody
+      assert.strictEqual((yield* draftOfRun(session, again.id)).body, SECOND_DRAFT)
+
+      // Even confirmed, the edit is not destroyed. What the User agreed to was
+      // a new Draft taking its place, not their afternoon being deleted.
+      const edited = (yield* Effect.flatMap(get(session, `/v1/drafts/${first.id}`), (r) => r.json)) as DraftBody
+      assert.strictEqual(edited.editedBody, MY_OWN_WORDS)
+      assert.strictEqual(edited.body, FIRST_DRAFT)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }], forgeAnsweringOnce)))
+  )
+
+  it.live("cannot be asked for by anybody but the Draft's owner", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+      const first = yield* draftOfRun(session, run.id)
+
+      const stranger = yield* arrive(HUBOT_CODE, HUBOT_INSTALLATION)
+
+      const refused = yield* regenerate(stranger, first.id)
+      const unknown = yield* regenerate(stranger, "00000000-0000-4000-8000-000000000000")
+
+      assert.strictEqual(refused.status, 404)
+      assert.strictEqual(unknown.status, 404)
+      // The same answer either way: the 404 confirmed nothing.
+      assert.deepStrictEqual(yield* refused.json, yield* unknown.json)
+
+      assert.strictEqual((yield* regenerate(undefined, first.id)).status, 401)
+
+      // And nothing was queued on the owner's behalf, or spent in their name.
+      yield* workUntilEmpty
+      assert.strictEqual((yield* listDrafts(session)).items.length, 1)
+      assert.strictEqual((yield* draftOfRun(session, run.id)).body, FIRST_DRAFT)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }], forgeAnsweringOnce)))
   )
 })

@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { SessionAuthentication } from "../connections/api.ts"
 import { Forge } from "../connections/domain/forge.ts"
 import { TimeZone } from "../connections/domain/time-zone.ts"
+import { RunResponse } from "../runs/api.ts"
 import { CalendarDay } from "../runs/domain/day-window.ts"
 import { DRAFT_PAGE_SIZE, DraftCursorFromString, DraftShape, EditedBody } from "./domain/draft.ts"
 
@@ -114,6 +115,34 @@ export class EditDraftRequest extends Schema.Class<EditDraftRequest>("EditDraftR
 }) {}
 
 /**
+ * How a client asks for another take on the same day.
+ *
+ * One field, and it is a confirmation rather than an option: `discardEdit` is
+ * only looked at when the Draft carries the User's own rewrite, and saying
+ * nothing means "do not go past my work". A client that has not shown the User
+ * what they are about to leave behind should not be sending it.
+ *
+ * What it confirms is narrower than it sounds. The edited Draft is kept, so
+ * nothing is deleted; what is discarded is its place as the Draft this day
+ * leads to.
+ */
+export class RegenerateDraftRequest extends Schema.Class<RegenerateDraftRequest>("RegenerateDraftRequest")({
+  discardEdit: Schema.optionalWith(Schema.Boolean, { default: () => false })
+}) {}
+
+/**
+ * This Draft has been edited, and the request did not say to write past it.
+ *
+ * 409 rather than 400: nothing about the request is malformed, and repeating it
+ * with the confirmation is exactly what the client should do next.
+ */
+export class UnconfirmedEdit extends Schema.TaggedError<UnconfirmedEdit>()(
+  "UnconfirmedEdit",
+  { message: Schema.String },
+  HttpApiSchema.annotations({ status: 409 })
+) {}
+
+/**
  * No Draft for this Run. The same answer whether the Run is somebody else's,
  * never existed, or has not written anything yet — so a 404 confirms nothing.
  */
@@ -162,6 +191,18 @@ export class DraftsApiGroup extends HttpApiGroup.make("drafts")
       .addSuccess(DraftResponse)
       .addError(NoSuchDraft)
       .annotate(OpenApi.Summary, "Replace a Draft's body with the User's own text")
+  )
+  .add(
+    HttpApiEndpoint.post("regenerate", "/v1/drafts/:id/regenerate")
+      .setPath(Schema.Struct({ id: Schema.UUID }))
+      .setPayload(RegenerateDraftRequest)
+      // 202 and a Run, not 200 and a Draft: the model has not been called yet.
+      // The Run is polled like any other, and its Draft read from it when it
+      // finishes — the earlier Draft stays readable throughout, and afterwards.
+      .addSuccess(RunResponse, { status: 202 })
+      .addError(NoSuchDraft)
+      .addError(UnconfirmedEdit)
+      .annotate(OpenApi.Summary, "Write this day again, from the Digest already collected")
   )
   .middleware(SessionAuthentication)
   .annotate(OpenApi.Description, "The build-in-public post Ara wrote from a day's Digest.") {}
