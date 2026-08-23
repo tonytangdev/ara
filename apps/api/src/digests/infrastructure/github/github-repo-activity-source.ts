@@ -20,8 +20,20 @@ const PER_PAGE = 100
 const MAX_PAGES = 5
 const MAX_COMMITS = 200
 
+/**
+ * How many branches one read of a day will look at (ADR-0006).
+ *
+ * Every branch costs a call, so this is the ceiling on what a repository with
+ * hundreds of stale branches can charge a single Run. One page, in the order
+ * GitHub lists them.
+ */
+const MAX_BRANCHES = 50
+
 /** How many commits are asked about at once. Polite rather than fast; a Run is not in a hurry. */
 const DETAIL_CONCURRENCY = 5
+
+/** The same politeness, applied to asking each branch what it saw today. */
+const BRANCH_CONCURRENCY = 5
 
 /**
  * What Ara decodes out of GitHub's replies — and, just as deliberately, what it
@@ -36,7 +48,10 @@ const CommitListItem = Schema.Struct({
   sha: Schema.String,
   commit: Schema.Struct({
     message: Schema.String,
-    author: Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.String) })),
+    /** `date` is the author date: when the work was written, whatever later rewrote it. */
+    author: Schema.NullOr(
+      Schema.Struct({ name: Schema.optional(Schema.String), date: Schema.optional(Schema.DateTimeUtc) })
+    ),
     committer: Schema.NullOr(Schema.Struct({ date: Schema.DateTimeUtc }))
   }),
   /** Null when the commit's email is not linked to a GitHub account. */
@@ -66,6 +81,11 @@ const PullRequestItem = Schema.Struct({
   user: Schema.NullOr(Schema.Struct({ login: Schema.String, type: Schema.optional(Schema.String) }))
 })
 
+const RepoDetail = Schema.Struct({ default_branch: Schema.String })
+
+const Branch = Schema.Struct({ name: Schema.String })
+
+const BranchList = Schema.Array(Branch)
 const PullRequestList = Schema.Array(PullRequestItem)
 const CommitList = Schema.Array(CommitListItem)
 
@@ -95,10 +115,13 @@ const within = (window: DayWindow, at: DateTime.Utc): boolean =>
  * minted through `InstallationTokens` from the App's private key, for the one
  * installation the repository is reachable through (ADR-0005).
  *
- * Two reads, and the arithmetic is ours: commits for the Day Window, then each
- * commit's file list. Areas and top files are aggregated from those file lists
- * when the Digest is built, never fetched as a third question — GitHub's own
- * statistics endpoints answer for the whole repository, not for a day.
+ * Branches first, then each branch's commits for the Day Window, then each
+ * commit's file list. Asking per branch is what stops a day spent on a feature
+ * branch from being read as the day the default branch had (ADR-0006); the
+ * branch set and the resulting fan-out are bounded above. Areas and top files
+ * are aggregated from the file lists when the Digest is built, never fetched as
+ * a further question — GitHub's own statistics endpoints answer for the whole
+ * repository, not for a day.
  *
  * Rate limiting and the request timeout are composed into `read` rather than
  * applied by whoever calls this adapter. A Run asks for a day of Activity and
@@ -106,9 +129,9 @@ const within = (window: DayWindow, at: DateTime.Utc): boolean =>
  * long any of them was allowed to take are this file's business alone.
  *
  * `since`/`until` are GitHub's filter on the committer date, which is inclusive
- * at both ends; the Day Window is half-open. Every commit is checked against
- * the window again here, so the boundary is Ara's definition rather than
- * GitHub's.
+ * at both ends; the Day Window is half-open, and is decided on the author date.
+ * Every commit is checked against the window again here, so which day a commit
+ * belongs to is Ara's definition rather than GitHub's.
  */
 export const GithubRepoActivitySourceLive = Layer.effect(
   RepoActivitySource,
@@ -233,41 +256,93 @@ export const GithubRepoActivitySourceLive = Layer.effect(
 
         const repoPath = `/repos/${repository.owner}/${repository.name}`
 
-        const listed: Array<typeof CommitListItem.Type> = []
-        for (let page = 1; page <= MAX_PAGES && listed.length < MAX_COMMITS; page++) {
-          const commits = yield* read(
-            `${repoPath}/commits`,
-            {
-              since: DateTime.formatIso(dayWindow.startsAt),
-              // Inclusive on GitHub's side; a second short of the window's
-              // exclusive end is the closest it can be asked for.
-              until: DateTime.formatIso(DateTime.subtract(dayWindow.endsAt, { seconds: 1 })),
-              per_page: String(PER_PAGE),
-              page: String(page)
-            },
-            CommitList,
-            "what was committed"
+        /**
+         * Which branches to ask. Without this GitHub answers for the default
+         * branch alone, and a day spent on a feature branch reads as a day
+         * somebody else had (ADR-0006).
+         *
+         * The default branch is asked for by name rather than trusted to appear
+         * in the first page of branches, which GitHub lists alphabetically: a
+         * repository with fifty branches sorted before `main` would otherwise
+         * lose the one branch Ara used to read, which is a worse day than the
+         * one being fixed.
+         */
+        const { default_branch: defaultBranch } = yield* read(repoPath, {}, RepoDetail, "which branch it builds from")
+
+        const listedBranches = yield* read(
+          `${repoPath}/branches`,
+          { per_page: String(MAX_BRANCHES) },
+          BranchList,
+          "which branches it has"
+        )
+
+        const branches = [defaultBranch, ...listedBranches.map((branch) => branch.name)]
+          .filter((name, at, all) => all.indexOf(name) === at)
+          .slice(0, MAX_BRANCHES)
+
+        /** One branch's commits for the Day Window. */
+        const commitsOn = (branch: string) =>
+          Effect.gen(function* () {
+            const listed: Array<typeof CommitListItem.Type> = []
+            for (let page = 1; page <= MAX_PAGES && listed.length < MAX_COMMITS; page++) {
+              const commits = yield* read(
+                `${repoPath}/commits`,
+                {
+                  sha: branch,
+                  since: DateTime.formatIso(dayWindow.startsAt),
+                  // Inclusive on GitHub's side; a second short of the window's
+                  // exclusive end is the closest it can be asked for.
+                  until: DateTime.formatIso(DateTime.subtract(dayWindow.endsAt, { seconds: 1 })),
+                  per_page: String(PER_PAGE),
+                  page: String(page)
+                },
+                CommitList,
+                `what was committed on ${branch}`
+              )
+
+              listed.push(...commits)
+              if (commits.length < PER_PAGE) break
+            }
+            return listed
+          })
+
+        const perBranch = yield* Effect.forEach(branches, commitsOn, { concurrency: BRANCH_CONCURRENCY })
+
+        // Every branch carries the default branch's history as well as its own,
+        // so the same commit comes back once per branch it is reachable from.
+        // The sha is what makes it one commit again (ADR-0006).
+        const distinct = new Map<string, typeof CommitListItem.Type>()
+        for (const item of perBranch.flat()) if (!distinct.has(item.sha)) distinct.set(item.sha, item)
+
+        const inWindow = [...distinct.values()]
+          .flatMap((item) => {
+            // The author date, so that a branch replayed onto today by a rebase
+            // or a squash is not reported as today's work; the committer date
+            // is only what GitHub was asked to filter on. It is also all there
+            // is to fall back on for a commit GitHub records without an author
+            // date at all — rare, and better dated imperfectly than dropped.
+            const authoredAt = item.commit.author?.date ?? item.commit.committer?.date
+            return authoredAt !== undefined && within(dayWindow, authoredAt) ? [{ item, authoredAt }] : []
+          })
+          // Newest first, ties by sha: a day over the ceiling is truncated the
+          // same way every time it is read.
+          .sort(
+            (left, right) =>
+              DateTime.toEpochMillis(right.authoredAt) - DateTime.toEpochMillis(left.authoredAt) ||
+              left.item.sha.localeCompare(right.item.sha)
           )
-
-          listed.push(...commits)
-          if (commits.length < PER_PAGE) break
-        }
-
-        const inWindow = listed
-          .filter((item) => item.commit.committer !== null && within(dayWindow, item.commit.committer.date))
           .slice(0, MAX_COMMITS)
 
         const commits = yield* Effect.forEach(
           inWindow,
-          (item) =>
+          ({ item, authoredAt }) =>
             Effect.map(
               read(`${repoPath}/commits/${item.sha}`, {}, CommitDetail, `what commit ${item.sha} touched`),
               (detail) =>
                 new CommitActivity({
                   sha: item.sha,
                   subject: subjectOf(item.commit.message),
-                  // Filtered above: every item reaching here has a committer date.
-                  committedAt: item.commit.committer?.date ?? dayWindow.startsAt,
+                  authoredAt,
                   authorLogin: item.author?.login ?? item.commit.author?.name ?? null,
                   authorIsBot: item.author?.type === "Bot",
                   parentCount: item.parents.length,

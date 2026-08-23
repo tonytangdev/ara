@@ -46,7 +46,7 @@ const commit = (input: CommitInput = {}) =>
   new CommitActivity({
     sha: `sha-${++sequence}`,
     subject: input.subject ?? "Do the work",
-    committedAt: DateTime.unsafeMake(input.at ?? "2026-08-22T10:00:00.000Z"),
+    authoredAt: DateTime.unsafeMake(input.at ?? "2026-08-22T10:00:00.000Z"),
     authorLogin: input.author === undefined ? "octocat" : input.author,
     authorIsBot: input.forgeSaysBot ?? false,
     parentCount: input.parents ?? 1,
@@ -318,6 +318,37 @@ describe("What a Digest leaves out", () => {
       assert.strictEqual(digest.commitCount, 1)
       // And the merge's line counts are gone with it, rather than inflating the day.
       assert.strictEqual(digest.totals.additions, 5)
+    }).pipe(Effect.provide(Building))
+  )
+
+  it.effect("tells branch work once when the branch is merged the same day", () =>
+    Effect.gen(function* () {
+      // A Digest reads every branch (ADR-0006), so the day's commits are already
+      // in it by the time the merge lands. The merge commit is the second
+      // telling of the same work, and the two-parent rule is what drops it.
+      const digest = yield* digestOf(
+        activityOf([
+          commit({ subject: "Add the collect stage", at: "2026-08-22T09:00:00.000Z" }),
+          commit({ subject: "Test the collect stage", at: "2026-08-22T10:00:00.000Z" }),
+          commit({
+            subject: "Merge pull request #14 from tonytangdev/feat/mvp-day-to-draft",
+            at: "2026-08-22T11:00:00.000Z",
+            parents: 2,
+            files: [
+              ["src/digests/collect.ts", 5, 2],
+              ["src/digests/collect.test.ts", 5, 2]
+            ]
+          })
+        ])
+      )
+
+      assert.strictEqual(digest.commitCount, 2)
+      assert.deepStrictEqual(
+        digest.commits.map((entry) => entry.subject),
+        ["Add the collect stage", "Test the collect stage"]
+      )
+      // Two commits' worth of churn, not four.
+      assert.strictEqual(digest.totals.additions + digest.totals.deletions, 14)
     }).pipe(Effect.provide(Building))
   )
 

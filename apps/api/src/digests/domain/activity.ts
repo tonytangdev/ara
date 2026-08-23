@@ -35,7 +35,15 @@ export class CommitActivity extends Schema.Class<CommitActivity>("CommitActivity
   sha: Schema.NonEmptyString,
   /** The first line of the commit message. Full messages are deliberately not carried. */
   subject: Schema.String,
-  committedAt: Schema.DateTimeUtc,
+  /**
+   * When the work was written, not when it landed.
+   *
+   * The author date rather than the committer date, because a rebase, a squash
+   * or a cherry-pick rewrites the second and leaves the first alone: reading a
+   * day from committer dates reports a week of branch work again on the day it
+   * is merged (ADR-0006). This is the date a commit's Day Window is decided by.
+   */
+  authoredAt: Schema.DateTimeUtc,
   authorLogin: Schema.NullOr(Schema.String),
   authorIsBot: Schema.Boolean,
   /** More than one parent means a merge: branch mechanics rather than work. */

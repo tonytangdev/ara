@@ -45,7 +45,13 @@ export const isBotAuthor = (author: {
   return login.endsWith("[bot]") || BOT_LOGINS.has(login)
 }
 
-/** A commit with more than one parent is branch mechanics, not a day's work. */
+/**
+ * A commit with more than one parent is branch mechanics, not a day's work.
+ *
+ * It also keeps merged work from being told twice. A Digest reads every branch
+ * (ADR-0006), so the commits a merge brings onto the default branch were already
+ * reported on the day they were written; the merge commit is the second telling.
+ */
 export const isMergeCommit = (commit: CommitActivity): boolean => commit.parentCount > 1
 
 /**

@@ -8,8 +8,10 @@ stop being two separate chores.
 
 **Digest**:
 The factual, prose-free record of what happened in a repository during one Day
-Window: which commits, which pull requests, which areas of the codebase. Derived
-from the Forge alone, with no language model involved.
+Window: which commits, which pull requests, which areas of the codebase. Covers
+every branch, and dates a commit by when it was written rather than by when it
+landed (ADR-0006). Derived from the Forge alone, with no language model
+involved.
 _Avoid_: Summary, report, activity log
 
 **Draft**:

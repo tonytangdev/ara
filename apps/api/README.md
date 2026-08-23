@@ -136,6 +136,19 @@ identity and let go of the connection.
 Local development needs a real GitHub App and a callback URL that reaches your
 machine. See `.env.example` for the four values it wants.
 
+## Building a Digest
+
+A Digest covers **every branch**, not the repository's default branch, and a
+commit counts on the day of its **author date**
+([ADR-0006](../../docs/adr/0006-the-digest-reads-every-branch.md)). Reading the
+default branch alone was GitHub's default rather than a decision, and it cost a
+day on a feature branch three quarters of its work. The adapter asks which
+branches exist — the default branch by name, so a crowded branch list cannot
+lose it — reads each one's commits, and deduplicates by sha; the author date is
+what stops a squash or a rebase reporting a week of branch work again on the day
+it landed. Every branch costs a call, so the fan-out is bounded at 50 branches
+and metered like every other read.
+
 ## Writing a Draft
 
 The second stage of a Run reads the Digest the first stage persisted and writes

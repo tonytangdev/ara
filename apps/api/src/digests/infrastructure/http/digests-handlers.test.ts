@@ -113,7 +113,7 @@ const commit = (
   new CommitActivity({
     sha,
     subject,
-    committedAt: DateTime.unsafeMake("2026-08-22T10:00:00.000Z"),
+    authoredAt: DateTime.unsafeMake("2026-08-22T10:00:00.000Z"),
     authorLogin: extra.author ?? "octocat",
     authorIsBot: false,
     parentCount: extra.parents ?? 1,
