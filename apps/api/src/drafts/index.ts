@@ -2,6 +2,7 @@ import { FetchHttpClient } from "@effect/platform"
 import { Layer } from "effect"
 import { PgDigestRepositoryLive } from "../digests/infrastructure/persistence/pg-digest-repository.ts"
 import { DescribeDraft } from "./application/describe-draft.ts"
+import { ListDrafts } from "./application/list-drafts.ts"
 import { WriteDraft } from "./application/write-draft.ts"
 import { LanguageModelDraftWriterLive } from "./infrastructure/ai/language-model-draft-writer.ts"
 import { OpenRouterLanguageModelLive } from "./infrastructure/ai/openrouter.ts"
@@ -32,7 +33,7 @@ const DraftWriterLive = LanguageModelDraftWriterLive.pipe(
  * Postgres the module reads and writes.
  */
 export const DraftsLive = DraftsHandlersLive.pipe(
-  Layer.provide(DescribeDraft.Default),
+  Layer.provide(Layer.mergeAll(DescribeDraft.Default, ListDrafts.Default)),
   Layer.provide(PgDraftRepositoryLive)
 )
 
@@ -41,7 +42,7 @@ export const WriteDraftLive = WriteDraft.Default.pipe(
   Layer.provide(Layer.mergeAll(DraftWriterLive, PgDraftRepositoryLive, PgDigestRepositoryLive))
 )
 
-export { DraftResponse, DraftsApiGroup, NoSuchDraft } from "./api.ts"
+export { DraftPageResponse, DraftResponse, DraftSummaryResponse, DraftsApiGroup, NoSuchDraft } from "./api.ts"
 export { WriteDraft } from "./application/write-draft.ts"
-export { StoredDraft, WrittenDraft } from "./domain/draft.ts"
+export { DraftSummary, StoredDraft, WrittenDraft } from "./domain/draft.ts"
 export { DraftWriter } from "./domain/ports/draft-writer.ts"

@@ -1,8 +1,8 @@
 import { SqlClient } from "@effect/sql"
-import { Effect, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, type Option, Schema } from "effect"
 import type { UserId } from "../../../connections/domain/user.ts"
 import type { RunId } from "../../../runs/domain/run.ts"
-import { StoredDraft, type WrittenDraft } from "../../domain/draft.ts"
+import { type DraftCursor, type DraftId, DraftSummary, StoredDraft, type WrittenDraft } from "../../domain/draft.ts"
 import { DraftRepository } from "../../domain/ports/draft-repository.ts"
 
 interface DraftRow {
@@ -38,6 +38,38 @@ const toStoredDraft = (row: DraftRow) =>
   })
 
 const COLUMNS = "id, run_id, digest_id, body, model, input_tokens, output_tokens, total_tokens, generated_at"
+
+/**
+ * One row of the Draft list: the Draft, plus the two things that say which day
+ * of which repository it is about.
+ */
+interface DraftSummaryRow {
+  readonly id: string
+  readonly run_id: string
+  readonly digest_id: string
+  readonly forge: string
+  readonly owner: string
+  readonly name: string
+  readonly day: string
+  readonly time_zone: string
+  readonly is_quiet: boolean
+  readonly model: string
+  readonly generated_at: Date
+}
+
+const decodeSummary = Schema.decodeUnknown(DraftSummary)
+
+const toDraftSummary = (row: DraftSummaryRow) =>
+  decodeSummary({
+    id: row.id,
+    runId: row.run_id,
+    digestId: row.digest_id,
+    repository: { forge: row.forge, owner: row.owner, name: row.name },
+    dayWindow: { day: row.day, timeZone: row.time_zone },
+    isQuiet: row.is_quiet,
+    model: row.model,
+    generatedAt: row.generated_at.toISOString()
+  })
 
 /**
  * Driven (outbound) adapter for Drafts.
@@ -80,6 +112,48 @@ export const PgDraftRepositoryLive = Layer.effect(
         Effect.orDie
       )
 
-    return DraftRepository.of({ save, latestForRun })
+    const findOwnedBy = (id: DraftId, userId: UserId) =>
+      sql<DraftRow>`
+        select ${sql.unsafe(COLUMNS)} from drafts
+        where id = ${id} and user_id = ${userId}
+      `.pipe(
+        Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toStoredDraft(rows[0])))),
+        Effect.orDie
+      )
+
+    /**
+     * The list, newest first, keyed off `(generated_at, id)` so a cursor names
+     * a position rather than a count. The joins are what turn a Draft into
+     * something choosable: the Run says which repository and which Day Window,
+     * and the Digest carries the Quiet Day judgement that decides a Draft's
+     * shape. Both are inner joins because both rows are guaranteed — a Draft
+     * cannot be written without them, and they cascade away together.
+     */
+    const listFor = (userId: UserId, page: { readonly limit: number; readonly after: Option.Option<DraftCursor> }) => {
+      const after =
+        page.after._tag === "None"
+          ? sql``
+          : sql`and (drafts.generated_at, drafts.id) < (${DateTime.toDate(page.after.value.generatedAt)}::timestamptz, ${
+              page.after.value.id
+            }::uuid)`
+
+      return sql<DraftSummaryRow>`
+        select
+          drafts.id, drafts.run_id, drafts.digest_id, drafts.model, drafts.generated_at,
+          runs.forge, runs.owner, runs.name, to_char(runs.day, 'YYYY-MM-DD') as day, runs.time_zone,
+          coalesce((digests.content ->> 'isQuiet')::boolean, false) as is_quiet
+        from drafts
+        join runs on runs.id = drafts.run_id
+        join digests on digests.id = drafts.digest_id
+        where drafts.user_id = ${userId} ${after}
+        order by drafts.generated_at desc, drafts.id desc
+        limit ${page.limit}
+      `.pipe(
+        Effect.flatMap((rows) => Effect.forEach(rows, toDraftSummary)),
+        Effect.orDie
+      )
+    }
+
+    return DraftRepository.of({ save, latestForRun, findOwnedBy, listFor })
   })
 )

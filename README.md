@@ -37,6 +37,12 @@ and what it cost attached. Set `OPENROUTER_API_KEY` before asking for a Run;
 `DRAFT_MODEL` decides which model answers, and neither the use cases nor the
 tests know or care which one it is.
 
+Drafts outlive the Run id you asked with: `GET /v1/drafts` lists the ones you
+have accumulated, newest first, each carrying the repository, the Day Window and
+whether it is a Quiet Draft, so you can pick one out without opening it. The
+list is paged — `limit` up to 100, and `after` taking the previous page's opaque
+`nextCursor` — and `GET /v1/drafts/:id` opens one in full.
+
 Scripts at the root fan out to every workspace package: `pnpm build`, `pnpm dev`,
 `pnpm test`, `pnpm lint`, `pnpm typecheck`.
 

@@ -1,4 +1,6 @@
 import { Schema } from "effect"
+import { Repository } from "../../connections/domain/repository.ts"
+import { DayWindow } from "../../runs/domain/day-window.ts"
 
 export const DraftId = Schema.UUID.pipe(Schema.brand("DraftId"))
 export type DraftId = typeof DraftId.Type
@@ -74,3 +76,79 @@ export class StoredDraft extends Schema.Class<StoredDraft>("StoredDraft")({
  * anything yet — so asking cannot confirm another User's Run exists.
  */
 export class DraftNotFound extends Schema.TaggedError<DraftNotFound>()("DraftNotFound", {}) {}
+
+/**
+ * How many Drafts one page of the list carries.
+ *
+ * The ceiling is the load-bearing half: Drafts accumulate one per Run forever,
+ * so "list my Drafts" has to be a bounded question however long the habit has
+ * been running. The default is a screen's worth — enough to recognise the one
+ * you meant without asking for the rest.
+ */
+export const DRAFT_PAGE_SIZE = { default: 20, max: 100 } as const
+
+/**
+ * Where the previous page of Drafts stopped.
+ *
+ * A position rather than an offset: the list is ordered by `generatedAt` and
+ * broken ties by `id`, and the next page is everything strictly below that
+ * pair. An offset would skip or repeat entries as new Drafts land at the top,
+ * which is precisely what happens while a Run the User just asked for finishes.
+ */
+export class DraftCursor extends Schema.Class<DraftCursor>("DraftCursor")({
+  generatedAt: Schema.DateTimeUtc,
+  id: Schema.UUID
+}) {}
+
+/**
+ * The cursor as a client sees it: one opaque string, and not a shape anybody
+ * outside is invited to build by hand. Decoding is part of the schema, so a
+ * cursor that has been tampered with fails at the edge as a bad request rather
+ * than reaching a query.
+ */
+export const DraftCursorFromString = Schema.compose(
+  Schema.StringFromBase64Url,
+  Schema.parseJson(DraftCursor)
+).annotations({
+  identifier: "DraftCursor",
+  description: "An opaque position in the Draft list, taken from a previous page's nextCursor"
+})
+
+/** The cursor that would ask for whatever comes after this Draft. */
+export const cursorAfter = (summary: DraftSummary): DraftCursor =>
+  new DraftCursor({ generatedAt: summary.generatedAt, id: summary.id })
+
+/**
+ * One Draft as the list shows it: enough to choose between entries, and not the
+ * prose itself.
+ *
+ * Repository and Day Window are here because a Draft on its own is undated
+ * prose — "which day was this?" is the question a list of them has to answer.
+ * The body is deliberately absent: a page of twenty full posts is a large
+ * response to send somebody who wants to open one of them.
+ */
+export class DraftSummary extends Schema.Class<DraftSummary>("DraftSummary")({
+  id: Schema.UUID,
+  runId: Schema.UUID,
+  digestId: Schema.UUID,
+  repository: Repository,
+  dayWindow: DayWindow,
+  /**
+   * Whether this is a Quiet Draft: a few honest sentences about a light day
+   * rather than a full-length post. Today it is read from the Digest's own
+   * Quiet Day judgement, which is the only place that judgement is recorded;
+   * #8 gives a Draft its own shape and this becomes a fact about the Draft.
+   */
+  isQuiet: Schema.Boolean,
+  model: Schema.String,
+  generatedAt: Schema.DateTimeUtc
+}) {}
+
+/**
+ * One page of Drafts, newest first. `nextCursor` is null when this page is the
+ * end of the list, so "is there more?" needs no second request to answer.
+ */
+export interface DraftPage {
+  readonly items: ReadonlyArray<DraftSummary>
+  readonly nextCursor: DraftCursor | null
+}
