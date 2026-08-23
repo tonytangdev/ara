@@ -1,7 +1,7 @@
 import { Context, type Effect, type Option } from "effect"
 import type { UserId } from "../../../connections/domain/user.ts"
 import type { RunId } from "../../../runs/domain/run.ts"
-import type { StoredDraft, WrittenDraft } from "../draft.ts"
+import type { DraftCursor, DraftId, DraftSummary, StoredDraft, WrittenDraft } from "../draft.ts"
 
 /**
  * Driven (outbound) port for Drafts.
@@ -22,5 +22,15 @@ export class DraftRepository extends Context.Tag("domain/drafts/DraftRepository"
   {
     readonly save: (runId: RunId, userId: UserId, digestId: string, written: WrittenDraft) => Effect.Effect<StoredDraft>
     readonly latestForRun: (runId: RunId, userId: UserId) => Effect.Effect<Option.Option<StoredDraft>>
+    readonly findOwnedBy: (id: DraftId, userId: UserId) => Effect.Effect<Option.Option<StoredDraft>>
+    /**
+     * One page of the User's Drafts, newest first. `limit` is the caller's, and
+     * bounded above it: this port will happily return whatever it is asked for,
+     * so the ceiling belongs to the use case rather than here.
+     */
+    readonly listFor: (
+      userId: UserId,
+      page: { readonly limit: number; readonly after: Option.Option<DraftCursor> }
+    ) => Effect.Effect<ReadonlyArray<DraftSummary>>
   }
 >() {}

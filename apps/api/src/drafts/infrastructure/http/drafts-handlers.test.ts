@@ -62,6 +62,7 @@ import { PgJobQueueLive } from "../../../runs/infrastructure/persistence/pg-job-
 import { PgRunRepositoryLive } from "../../../runs/infrastructure/persistence/pg-run-repository.ts"
 import { DraftsApiGroup } from "../../api.ts"
 import { DescribeDraft } from "../../application/describe-draft.ts"
+import { ListDrafts } from "../../application/list-drafts.ts"
 import { DraftUnavailable } from "../../domain/ports/draft-writer.ts"
 import { PgDraftRepositoryLive } from "../../infrastructure/persistence/pg-draft-repository.ts"
 import { draftWriterAnswering, type ScriptedAnswer, writeDraftOver } from "../../testing/fake-draft-writer.ts"
@@ -143,6 +144,15 @@ const A_BUSY_DAY = {
   ]
 } as const
 
+/** A day light enough for the Digest to call it a Quiet Day. */
+const A_QUIET_DAY = {
+  commits: [commit("ddd", "Fix a typo in the README", [file("README.md", 1, 1)])],
+  pullRequests: []
+} as const
+
+/** The day the fixture reports as light, so a Quiet Day is reachable over HTTP. */
+const QUIET_DAY = "2026-08-19"
+
 const FIRST_DRAFT =
   "Spent the day finishing the collect stage and starting on the one that writes. " +
   "The split is holding up: reading a day out of GitHub and writing about it are now two " +
@@ -217,15 +227,15 @@ const fakeReachableRepositories = Layer.succeed(
 )
 
 /** The Forge, answering from a fixture: the same Activity for whatever is asked. */
-const forgeReporting = repoActivitySourceOf(
-  ({ dayWindow, repository }) =>
-    new RepositoryActivity({
-      repository,
-      dayWindow,
-      commits: A_BUSY_DAY.commits,
-      pullRequests: A_BUSY_DAY.pullRequests
-    })
-)
+const forgeReporting = repoActivitySourceOf(({ dayWindow, repository }) => {
+  const day = dayWindow.day === QUIET_DAY ? A_QUIET_DAY : A_BUSY_DAY
+  return new RepositoryActivity({
+    repository,
+    dayWindow,
+    commits: day.commits,
+    pullRequests: day.pullRequests
+  })
+})
 
 const TestApi = HttpApi.make("ara")
   .add(ConnectionsApiGroup)
@@ -277,6 +287,7 @@ const server = (answers: ReadonlyArray<ScriptedAnswer>) =>
           DescribeRun.Default,
           DisconnectRepository.Default,
           ListReachableRepositories.Default,
+          ListDrafts.Default,
           ListRepoConnections.Default,
           ListRuns.Default,
           RecordGithubInstallation.Default,
@@ -527,5 +538,174 @@ describe("A model that answers with nothing", () => {
         ])
       )
     )
+  )
+})
+
+interface DraftSummaryBody {
+  readonly id: string
+  readonly runId: string
+  readonly digestId: string
+  readonly forge: string
+  readonly owner: string
+  readonly name: string
+  readonly day: string
+  readonly timeZone: string
+  readonly isQuiet: boolean
+  readonly model: string
+  readonly generatedAt: string
+}
+
+interface DraftPageBody {
+  readonly items: ReadonlyArray<DraftSummaryBody>
+  readonly nextCursor: string | null
+}
+
+/** Signed in, one repository connected, and a Run asked for and worked for each day given. */
+const draftsAcross = (days: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const session = yield* arrive(OCTOCAT_CODE, OCTOCAT_INSTALLATION)
+    const connection = (yield* Effect.flatMap(
+      post(session, "/v1/repo-connections", { forge: "github", owner: "octocat", name: "ara" }),
+      (response) => response.json
+    )) as { readonly id: string }
+
+    const runs: Array<RunBody> = []
+    for (const day of days) {
+      runs.push(
+        (yield* Effect.flatMap(
+          post(session, `/v1/repo-connections/${connection.id}/runs`, { day }),
+          (response) => response.json
+        )) as RunBody
+      )
+      // Worked one at a time, so the Drafts are generated in the order the days
+      // were asked for and "newest first" is a claim with a known answer.
+      yield* workUntilEmpty
+    }
+
+    return { session, runs }
+  })
+
+const listDrafts = (session: string | undefined, query = "") =>
+  Effect.flatMap(get(session, `/v1/drafts${query}`), (response) => response.json) as Effect.Effect<
+    DraftPageBody,
+    never,
+    HttpClient.HttpClient
+  >
+
+/**
+ * The point at which Ara stops being useful only inside a single Run: everything
+ * the User has accumulated, in one place, without needing to have kept a Run id.
+ */
+describe("Listing the Drafts a User has accumulated", () => {
+  it.live("hands them back newest first, with enough to tell them apart", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross([QUIET_DAY, "2026-08-20", "2026-08-21"])
+
+      const page = yield* listDrafts(session)
+
+      assert.deepStrictEqual(
+        page.items.map((draft) => draft.day),
+        ["2026-08-21", "2026-08-20", QUIET_DAY]
+      )
+      assert.isNull(page.nextCursor)
+
+      // Which repository, which Day Window, and whether it is a Quiet Draft:
+      // the three things you choose between entries on.
+      const [newest] = page.items
+      assert.strictEqual(newest?.forge, "github")
+      assert.strictEqual(newest?.owner, "octocat")
+      assert.strictEqual(newest?.name, "ara")
+      assert.strictEqual(newest?.timeZone, "UTC")
+      assert.strictEqual(newest?.isQuiet, false)
+
+      // The light day is marked as one, so a Quiet Draft is recognisable
+      // without opening it.
+      assert.strictEqual(page.items[2]?.isQuiet, true)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }, { body: FIRST_DRAFT }])))
+  )
+
+  it.live("hands back one page at a time, and says where the next one starts", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20", "2026-08-21", "2026-08-22"])
+
+      const first = yield* listDrafts(session, "?limit=2")
+      assert.strictEqual(first.items.length, 2)
+      assert.isNotNull(first.nextCursor)
+
+      const second = yield* listDrafts(session, `?limit=2&after=${encodeURIComponent(first.nextCursor ?? "")}`)
+      assert.strictEqual(second.items.length, 1)
+      // The last page says so, rather than leaving a cursor that returns nothing.
+      assert.isNull(second.nextCursor)
+
+      assert.deepStrictEqual(
+        [...first.items, ...second.items].map((draft) => draft.day),
+        ["2026-08-22", "2026-08-21", "2026-08-20"]
+      )
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }, { body: FIRST_DRAFT }])))
+  )
+
+  it.live("refuses a page size or a cursor it did not hand out", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20"])
+
+      // The ceiling is the reason this endpoint is safe to call after a year of
+      // daily Runs, so asking past it is a bad request rather than a big answer.
+      assert.strictEqual((yield* get(session, "/v1/drafts?limit=500")).status, 400)
+      assert.strictEqual((yield* get(session, "/v1/drafts?limit=0")).status, 400)
+      assert.strictEqual((yield* get(session, "/v1/drafts?after=not-a-cursor")).status, 400)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("shows a User only their own, and nothing about anybody else's", () =>
+    Effect.gen(function* () {
+      yield* draftsAcross(["2026-08-20"])
+
+      const stranger = yield* arrive(HUBOT_CODE, HUBOT_INSTALLATION)
+      const theirs = yield* listDrafts(stranger)
+
+      assert.deepStrictEqual(theirs.items, [])
+      assert.isNull(theirs.nextCursor)
+
+      assert.strictEqual((yield* get(undefined, "/v1/drafts")).status, 401)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+})
+
+describe("Opening one Draft by its own id", () => {
+  it.live("reads it in full, body and all", () =>
+    Effect.gen(function* () {
+      const { runs, session } = yield* draftsAcross(["2026-08-20"])
+
+      const listed = (yield* listDrafts(session)).items[0]
+      assert.isDefined(listed)
+
+      const response = yield* get(session, `/v1/drafts/${listed?.id}`)
+      assert.strictEqual(response.status, 200)
+      const draft = (yield* response.json) as DraftBody
+
+      assert.strictEqual(draft.id, listed?.id)
+      assert.strictEqual(draft.runId, runs[0]?.id)
+      assert.strictEqual(draft.body, FIRST_DRAFT)
+      assert.strictEqual(draft.model, "fake/scripted")
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("is invisible to everybody but its owner", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      const stranger = yield* arrive(HUBOT_CODE, HUBOT_INSTALLATION)
+
+      const refused = yield* get(stranger, `/v1/drafts/${listed?.id}`)
+      const unknown = yield* get(stranger, "/v1/drafts/00000000-0000-4000-8000-000000000000")
+
+      assert.strictEqual(refused.status, 404)
+      assert.strictEqual(unknown.status, 404)
+      // The same answer either way: the 404 confirmed nothing.
+      assert.deepStrictEqual(yield* refused.json, yield* unknown.json)
+
+      assert.strictEqual((yield* get(undefined, `/v1/drafts/${listed?.id}`)).status, 401)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
   )
 })
