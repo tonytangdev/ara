@@ -22,6 +22,10 @@ if it cannot, so `docker compose up` and `pnpm dev` are the whole setup.
 `GET /health` reports the database as a dependency: stop the container and it
 goes `503`, start it again and it recovers.
 
+The same process runs the HTTP API and the background worker that claims queued
+Runs, so the MVP is one thing to deploy. Set `WORKER_ENABLED=false` to run an
+instance that only serves HTTP.
+
 Scripts at the root fan out to every workspace package: `pnpm build`, `pnpm dev`,
 `pnpm test`, `pnpm lint`, `pnpm typecheck`.
 

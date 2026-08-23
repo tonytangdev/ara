@@ -9,6 +9,7 @@ import {
 import { Schema } from "effect"
 import { CurrentUser } from "./domain/current-user.ts"
 import { Forge } from "./domain/forge.ts"
+import { TimeZone } from "./domain/time-zone.ts"
 
 /** The cookie a signed-in browser carries. Opaque; the value is only a lookup key. */
 export const SESSION_COOKIE = "ara_session"
@@ -63,7 +64,17 @@ export class MeResponse extends Schema.Class<MeResponse>("MeResponse")({
   login: Schema.String,
   displayName: Schema.NullOr(Schema.String),
   avatarUrl: Schema.NullOr(Schema.String),
+  /** The User's own timezone: what a Day Window is a calendar day in. */
+  timeZone: TimeZone,
   installations: Schema.Array(InstallationResponse)
+}) {}
+
+/**
+ * Correcting the timezone Ara measures a Day Window in. An unknown zone name is
+ * refused by the schema itself, so no handler has to guess what to do with one.
+ */
+export class UpdateMeRequest extends Schema.Class<UpdateMeRequest>("UpdateMeRequest")({
+  timeZone: TimeZone
 }) {}
 
 /**
@@ -97,6 +108,13 @@ export class ConnectionsApiGroup extends HttpApiGroup.make("connections")
       .addSuccess(MeResponse)
       .middleware(SessionAuthentication)
       .annotate(OpenApi.Summary, "The signed-in User")
+  )
+  .add(
+    HttpApiEndpoint.patch("updateMe", "/v1/me")
+      .setPayload(UpdateMeRequest)
+      .addSuccess(MeResponse)
+      .middleware(SessionAuthentication)
+      .annotate(OpenApi.Summary, "Change the signed-in User's timezone")
   )
   .annotate(OpenApi.Description, "Signing in with a Forge, and who is signed in.") {}
 

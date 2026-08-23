@@ -5,6 +5,7 @@ import { Effect, Layer } from "effect"
 import { ServerConfig } from "../config.ts"
 import { ConnectionsLive } from "../connections/index.ts"
 import { HealthLive } from "../health/index.ts"
+import { RunsLive } from "../runs/index.ts"
 import { AraApi } from "./api.ts"
 import { DocsLive } from "./docs.ts"
 import { RequestLogger } from "./logging.ts"
@@ -15,7 +16,14 @@ import { RequestLogger } from "./logging.ts"
  * `SqlClient` is left as a requirement rather than provided: the composition
  * root supplies it, and tests supply a disposable one.
  */
-export const ApiLive = HttpApiBuilder.api(AraApi).pipe(Layer.provide(HealthLive), Layer.provide(ConnectionsLive))
+export const ApiLive = HttpApiBuilder.api(AraApi).pipe(
+  Layer.provide(HealthLive),
+  // Runs are always somebody's, so the runs module's endpoints declare the
+  // connections module's authentication middleware. `provideMerge` is what
+  // satisfies that: the middleware goes into the runs handlers *and* stays in
+  // the layer's output, where the API builder looks for it.
+  Layer.provide(RunsLive.pipe(Layer.provideMerge(ConnectionsLive)))
+)
 
 const NodeServerLive = Layer.unwrapEffect(
   Effect.map(ServerConfig, ({ host, port }) => NodeHttpServer.layer(createServer, { host, port }))

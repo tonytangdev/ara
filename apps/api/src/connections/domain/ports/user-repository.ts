@@ -1,4 +1,5 @@
 import { Context, type Effect, type Option } from "effect"
+import type { TimeZone } from "../time-zone.ts"
 import type { ForgeIdentity, User, UserId } from "../user.ts"
 
 /**
@@ -12,5 +13,7 @@ export class UserRepository extends Context.Tag("domain/connections/UserReposito
   {
     readonly resolve: (identity: ForgeIdentity) => Effect.Effect<User>
     readonly findById: (id: UserId) => Effect.Effect<Option.Option<User>>
+    /** Records the timezone a User says they are in, and answers with the User as it now stands. */
+    readonly setTimeZone: (id: UserId, timeZone: TimeZone) => Effect.Effect<Option.Option<User>>
   }
 >() {}

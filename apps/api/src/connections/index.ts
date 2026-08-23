@@ -9,6 +9,7 @@ import { DisconnectRepository } from "./application/disconnect-repository.ts"
 import { ListReachableRepositories } from "./application/list-reachable-repositories.ts"
 import { ListRepoConnections } from "./application/list-repo-connections.ts"
 import { RecordGithubInstallation } from "./application/record-github-installation.ts"
+import { SetTimeZone } from "./application/set-time-zone.ts"
 import { SecretCipher } from "./infrastructure/crypto/secret-cipher.ts"
 import { GithubAppJwt } from "./infrastructure/github/github-app-jwt.ts"
 import { GithubAuthorizationLive } from "./infrastructure/github/github-authorization.ts"
@@ -75,7 +76,8 @@ export const ConnectionsLive = Layer.mergeAll(ConnectionsHandlersLive, RepoConne
       DisconnectRepository.Default,
       ListReachableRepositories.Default,
       ListRepoConnections.Default,
-      RecordGithubInstallation.Default
+      RecordGithubInstallation.Default,
+      SetTimeZone.Default
     )
   ),
   Layer.provide(DrivenLive)
@@ -84,12 +86,24 @@ export const ConnectionsLive = Layer.mergeAll(ConnectionsHandlersLive, RepoConne
 export {
   ConnectionsApiGroup,
   MeResponse,
+  NoSuchRepoConnection,
   RepoConnectionsApiGroup,
   SESSION_COOKIE,
+  SessionAuthentication,
   SignInFailed,
   Unauthorized
 } from "./api.ts"
+export { CurrentUser } from "./domain/current-user.ts"
+export { Forge } from "./domain/forge.ts"
 export { InstallationTokens } from "./domain/ports/installation-tokens.ts"
 export { RepoConnectionRepository } from "./domain/ports/repo-connection-repository.ts"
-export { RepoConnection, RepoConnectionId } from "./domain/repo-connection.ts"
+export { RepoConnection, RepoConnectionId, RepoConnectionNotFound } from "./domain/repo-connection.ts"
 export { Repository } from "./domain/repository.ts"
+export { DEFAULT_TIME_ZONE, TimeZone } from "./domain/time-zone.ts"
+export { User, UserId } from "./domain/user.ts"
+/**
+ * The Repo Connection adapter on its own, for modules that need the port but
+ * not the rest of this one. The runs module asks whether a Run is entitled to
+ * a repository through this, rather than reaching for the table itself.
+ */
+export { PgRepoConnectionRepositoryLive as RepoConnectionRepositoryLive } from "./infrastructure/persistence/pg-repo-connection-repository.ts"

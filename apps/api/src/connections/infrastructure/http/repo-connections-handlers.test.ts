@@ -18,6 +18,7 @@ import { DisconnectRepository } from "../../application/disconnect-repository.ts
 import { ListReachableRepositories } from "../../application/list-reachable-repositories.ts"
 import { ListRepoConnections } from "../../application/list-repo-connections.ts"
 import { RecordGithubInstallation } from "../../application/record-github-installation.ts"
+import { SetTimeZone } from "../../application/set-time-zone.ts"
 import { Installation } from "../../domain/installation.ts"
 import { ForgeAuthorizationFailed, GithubAuthorization } from "../../domain/ports/github-authorization.ts"
 import { ReachableRepositories } from "../../domain/ports/reachable-repositories.ts"
@@ -164,7 +165,8 @@ const ConnectionsUnderTest = Layer.mergeAll(ConnectionsHandlersLive, RepoConnect
       DisconnectRepository.Default,
       ListReachableRepositories.Default,
       ListRepoConnections.Default,
-      RecordGithubInstallation.Default
+      RecordGithubInstallation.Default,
+      SetTimeZone.Default
     )
   ),
   Layer.provide(

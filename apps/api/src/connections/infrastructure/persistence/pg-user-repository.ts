@@ -1,6 +1,7 @@
 import { SqlClient } from "@effect/sql"
 import { Effect, Layer, Schema } from "effect"
 import { UserRepository } from "../../domain/ports/user-repository.ts"
+import type { TimeZone } from "../../domain/time-zone.ts"
 import { type ForgeIdentity, User, type UserId } from "../../domain/user.ts"
 
 interface UserRow {
@@ -10,6 +11,7 @@ interface UserRow {
   readonly login: string
   readonly display_name: string | null
   readonly avatar_url: string | null
+  readonly time_zone: string
 }
 
 const decode = Schema.decodeUnknown(User)
@@ -21,7 +23,8 @@ const toUser = (row: UserRow) =>
     forgeUserId: row.forge_user_id,
     login: row.login,
     displayName: row.display_name,
-    avatarUrl: row.avatar_url
+    avatarUrl: row.avatar_url,
+    timeZone: row.time_zone
   })
 
 /**
@@ -62,6 +65,12 @@ export const PgUserRepositoryLive = Layer.effect(
         Effect.orDie
       )
 
-    return UserRepository.of({ resolve, findById })
+    const setTimeZone = (id: UserId, timeZone: TimeZone) =>
+      sql<UserRow>`update users set time_zone = ${timeZone} where id = ${id} returning *`.pipe(
+        Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toUser(rows[0])))),
+        Effect.orDie
+      )
+
+    return UserRepository.of({ resolve, findById, setTimeZone })
   })
 )

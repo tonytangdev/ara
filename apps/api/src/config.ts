@@ -53,3 +53,14 @@ export const SessionConfig = Config.all({
 export const EncryptionConfig = Config.all({
   key: Config.redacted("CREDENTIAL_ENCRYPTION_KEY")
 })
+
+/**
+ * The background worker. `WORKER_ENABLED` exists so that the API and the worker
+ * can be run as two processes the day one machine is not enough, without either
+ * of them becoming a different program.
+ */
+export const WorkerConfig = Config.all({
+  enabled: Config.boolean("WORKER_ENABLED").pipe(Config.withDefault(true)),
+  /** How long to wait after finding the queue empty. Runs are rare; latency is cheap. */
+  pollInterval: Config.duration("WORKER_POLL_INTERVAL").pipe(Config.withDefault(Duration.seconds(1)))
+})

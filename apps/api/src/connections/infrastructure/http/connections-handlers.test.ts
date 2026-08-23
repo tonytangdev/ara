@@ -14,6 +14,7 @@ import { BeginGithubSignIn } from "../../application/begin-github-sign-in.ts"
 import { CompleteGithubSignIn } from "../../application/complete-github-sign-in.ts"
 import { DescribeCurrentUser } from "../../application/describe-current-user.ts"
 import { RecordGithubInstallation } from "../../application/record-github-installation.ts"
+import { SetTimeZone } from "../../application/set-time-zone.ts"
 import { Installation } from "../../domain/installation.ts"
 import { ForgeAuthorizationFailed, GithubAuthorization } from "../../domain/ports/github-authorization.ts"
 import { ForgeIdentity } from "../../domain/user.ts"
@@ -116,7 +117,8 @@ const ConnectionsUnderTest = ConnectionsHandlersLive.pipe(
       BeginGithubSignIn.Default,
       CompleteGithubSignIn.Default,
       DescribeCurrentUser.Default,
-      RecordGithubInstallation.Default
+      RecordGithubInstallation.Default,
+      SetTimeZone.Default
     )
   ),
   Layer.provide(

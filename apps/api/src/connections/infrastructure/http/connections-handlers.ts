@@ -5,9 +5,28 @@ import { AraApi } from "../../../http/api.ts"
 import { InstallationResponse, MeResponse, SESSION_COOKIE, SIGN_IN_STATE_COOKIE, SignInFailed } from "../../api.ts"
 import { BeginGithubSignIn } from "../../application/begin-github-sign-in.ts"
 import { CompleteGithubSignIn } from "../../application/complete-github-sign-in.ts"
-import { DescribeCurrentUser } from "../../application/describe-current-user.ts"
+import { DescribeCurrentUser, type Identity } from "../../application/describe-current-user.ts"
 import { RecordGithubInstallation } from "../../application/record-github-installation.ts"
+import { SetTimeZone } from "../../application/set-time-zone.ts"
 import { CurrentUser } from "../../domain/current-user.ts"
+
+const toMeResponse = (identity: Identity) =>
+  new MeResponse({
+    id: identity.user.id,
+    forge: identity.user.forge,
+    login: identity.user.login,
+    displayName: identity.user.displayName,
+    avatarUrl: identity.user.avatarUrl,
+    timeZone: identity.user.timeZone,
+    installations: identity.installations.map(
+      (installation) =>
+        new InstallationResponse({
+          forge: installation.forge,
+          id: installation.externalId,
+          accountLogin: installation.accountLogin
+        })
+    )
+  })
 
 /** The state cookie only has to survive a trip to GitHub and back. */
 const SIGN_IN_STATE_LIFETIME = "10 minutes"
@@ -93,21 +112,17 @@ export const ConnectionsHandlersLive = Layer.unwrapEffect(
             const describe = yield* DescribeCurrentUser
             const identity = yield* describe.execute(user)
 
-            return new MeResponse({
-              id: identity.user.id,
-              forge: identity.user.forge,
-              login: identity.user.login,
-              displayName: identity.user.displayName,
-              avatarUrl: identity.user.avatarUrl,
-              installations: identity.installations.map(
-                (installation) =>
-                  new InstallationResponse({
-                    forge: installation.forge,
-                    id: installation.externalId,
-                    accountLogin: installation.accountLogin
-                  })
-              )
-            })
+            return toMeResponse(identity)
+          })
+        )
+        .handle("updateMe", ({ payload }) =>
+          Effect.gen(function* () {
+            const user = yield* CurrentUser
+            const setTimeZone = yield* SetTimeZone
+            const describe = yield* DescribeCurrentUser
+
+            const updated = yield* setTimeZone.execute(user, payload.timeZone)
+            return toMeResponse(yield* describe.execute(updated))
           })
         )
     )
