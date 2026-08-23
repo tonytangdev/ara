@@ -16,7 +16,9 @@ const toResponse = (draft: StoredDraft) =>
     model: draft.model,
     inputTokens: draft.inputTokens,
     outputTokens: draft.outputTokens,
+    reasoningTokens: draft.reasoningTokens,
     totalTokens: draft.totalTokens,
+    costUsd: draft.costUsd,
     generatedAt: draft.generatedAt
   })
 

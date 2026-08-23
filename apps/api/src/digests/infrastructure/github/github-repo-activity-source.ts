@@ -1,9 +1,12 @@
+import type { HttpClientError } from "@effect/platform"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform"
-import { DateTime, Effect, Layer, Schema } from "effect"
-import { GithubAppConfig } from "../../../config.ts"
+import type { ParseResult } from "effect"
+import { DateTime, Duration, Effect, Layer, Schema } from "effect"
+import { GithubAppConfig, GithubRateLimitConfig } from "../../../config.ts"
 import { Installation } from "../../../connections/domain/installation.ts"
 import { InstallationTokens } from "../../../connections/domain/ports/installation-tokens.ts"
 import type { Repository } from "../../../connections/domain/repository.ts"
+import { GithubRateLimiter } from "../../../connections/infrastructure/github/github-rate-limiter.ts"
 import type { DayWindow } from "../../../runs/domain/day-window.ts"
 import { CommitActivity, FileChange, PullRequestActivity, RepositoryActivity } from "../../domain/activity.ts"
 import { ActivityUnavailable, RepoActivitySource } from "../../domain/ports/repo-activity-source.ts"
@@ -71,6 +74,21 @@ const CommitList = Schema.Array(CommitListItem)
 /** The subject line: everything a commit said before it started explaining itself. */
 const subjectOf = (message: string): string => (message.split("\n")[0] ?? "").trim()
 
+/**
+ * Which of GitHub's refusals are worth trying again.
+ *
+ * 429 is the plain rate limit and 403 is the one that catches people out:
+ * GitHub answers a spent primary quota, and a secondary limit, with a Forbidden
+ * rather than a Too Many Requests. Both mean "not now". A 404 or a 401 means
+ * the repository is gone or the App was uninstalled, and coming back in a
+ * minute will not change that.
+ */
+const isRetryableStatus = (status: number): boolean =>
+  status === 403 || status === 408 || status === 429 || status >= 500
+
+const statusOf = (error: HttpClientError.HttpClientError | ParseResult.ParseError): number | undefined =>
+  error._tag === "ResponseError" ? error.response.status : undefined
+
 const within = (window: DayWindow, at: DateTime.Utc): boolean =>
   DateTime.greaterThanOrEqualTo(at, window.startsAt) && DateTime.lessThan(at, window.endsAt)
 
@@ -87,6 +105,11 @@ const within = (window: DayWindow, at: DateTime.Utc): boolean =>
  * when the Digest is built, never fetched as a third question — GitHub's own
  * statistics endpoints answer for the whole repository, not for a day.
  *
+ * Rate limiting and the request timeout are composed into `read` rather than
+ * applied by whoever calls this adapter. A Run asks for a day of Activity and
+ * gets one; how many requests that took, whose budget paid for them and how
+ * long any of them was allowed to take are this file's business alone.
+ *
  * `since`/`until` are GitHub's filter on the committer date, which is inclusive
  * at both ends; the Day Window is half-open. Every commit is checked against
  * the window again here, so the boundary is Ara's definition rather than
@@ -96,8 +119,10 @@ export const GithubRepoActivitySourceLive = Layer.effect(
   RepoActivitySource,
   Effect.gen(function* () {
     const { apiBaseUrl } = yield* GithubAppConfig
+    const { requestTimeout } = yield* GithubRateLimitConfig
     const client = yield* HttpClient.HttpClient
     const tokens = yield* InstallationTokens
+    const rateLimiter = yield* GithubRateLimiter
 
     const activityFor = ({
       dayWindow,
@@ -109,12 +134,25 @@ export const GithubRepoActivitySourceLive = Layer.effect(
       readonly installationExternalId: string
     }) =>
       Effect.gen(function* () {
-        const unreadable = (what: string) =>
-          new ActivityUnavailable({
+        const where = `${repository.owner}/${repository.name}`
+
+        const unreadable = (what: string, error: HttpClientError.HttpClientError | ParseResult.ParseError) => {
+          const status = statusOf(error)
+
+          if (status === 429 || status === 403) {
+            return new ActivityUnavailable({
+              reason: `GitHub is rate limiting Ara's reads of ${where}.`,
+              retryable: true
+            })
+          }
+
+          return new ActivityUnavailable({
             reason:
-              `GitHub would not say ${what} for ${repository.owner}/${repository.name}. ` +
-              "The repository may have been removed, or Ara's access to it revoked."
+              `GitHub would not say ${what} for ${where}. ` +
+              "The repository may have been removed, or Ara's access to it revoked.",
+            retryable: status !== undefined && isRetryableStatus(status)
           })
+        }
 
         // `tokenFor` keys on the installation's own id; the account login is
         // carried for logs, and the repository's owner is the truest thing
@@ -129,6 +167,13 @@ export const GithubRepoActivitySourceLive = Layer.effect(
           )
           .pipe(Effect.mapError((failure) => new ActivityUnavailable({ reason: failure.reason })))
 
+        /**
+         * Every read of GitHub in this adapter goes through here, and so does
+         * every rule about reading GitHub: the installation's budget, the
+         * ceiling on how long one call may take, and what a refusal means. A
+         * page added later cannot forget any of them, because there is no other
+         * way to ask.
+         */
         const read = <A, I>(path: string, params: Record<string, string>, schema: Schema.Schema<A, I>, what: string) =>
           HttpClientRequest.get(new URL(path, apiBaseUrl)).pipe(
             HttpClientRequest.acceptJson,
@@ -137,8 +182,22 @@ export const GithubRepoActivitySourceLive = Layer.effect(
             client.execute,
             Effect.flatMap(HttpClientResponse.filterStatusOk),
             Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
-            Effect.mapError(() => unreadable(what)),
-            Effect.scoped
+            Effect.mapError((error) => unreadable(what, error)),
+            Effect.scoped,
+            // Spending the installation's budget, not a budget shared with
+            // every other User (ADR-0005).
+            (asking) => rateLimiter.apply(installationExternalId, asking),
+            // Covers the wait for a turn as well as the call, so a saturated
+            // budget degrades into something a Run can be tried again on
+            // rather than into a worker held indefinitely.
+            Effect.timeoutFail({
+              duration: requestTimeout,
+              onTimeout: () =>
+                new ActivityUnavailable({
+                  reason: `GitHub did not say ${what} for ${where} within ${Duration.format(requestTimeout)}.`,
+                  retryable: true
+                })
+            })
           )
 
         const repoPath = `/repos/${repository.owner}/${repository.name}`

@@ -48,8 +48,12 @@ export const draftWriterAnswering = (answers: ReadonlyArray<ScriptedAnswer>) =>
                   body: answer.body,
                   model: "fake/scripted",
                   inputTokens: 1_200,
-                  outputTokens: 300,
-                  totalTokens: 1_500
+                  outputTokens: 3_000,
+                  // Most of the output was thinking, which is what a reasoning
+                  // model's bill actually looks like.
+                  reasoningTokens: 2_700,
+                  totalTokens: 4_200,
+                  costUsd: 0.00822
                 })
               )
             }

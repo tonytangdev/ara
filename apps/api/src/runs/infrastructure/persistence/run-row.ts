@@ -16,6 +16,12 @@ export interface RunRow {
   readonly state: string
   readonly attempts: number
   readonly failure_reason: string | null
+  readonly input_tokens: number | null
+  readonly output_tokens: number | null
+  readonly reasoning_tokens: number | null
+  readonly total_tokens: number | null
+  /** `numeric` reaches the driver as text, so that six decimal places of a dollar arrive intact. */
+  readonly cost_usd: string | null
   readonly requested_at: Date
   readonly started_at: Date | null
   readonly finished_at: Date | null
@@ -36,9 +42,25 @@ export const runColumns = (sql: SqlClient.SqlClient, prefix = "") => {
   return sql`
     ${at("id")}, ${at("user_id")}, ${at("repo_connection_id")}, ${at("forge")}, ${at("owner")}, ${at("name")},
     to_char(${at("day")}, 'YYYY-MM-DD') as day, ${at("time_zone")}, ${at("trigger")}, ${at("state")},
-    ${at("attempts")}, ${at("failure_reason")}, ${at("requested_at")}, ${at("started_at")}, ${at("finished_at")}
+    ${at("attempts")}, ${at("failure_reason")}, ${at("requested_at")}, ${at("started_at")}, ${at("finished_at")},
+    ${at("input_tokens")}, ${at("output_tokens")}, ${at("reasoning_tokens")}, ${at("total_tokens")}, ${at("cost_usd")}
   `
 }
+
+/**
+ * A Run that has spent nothing carries no cost at all rather than a row of
+ * zeroes, so "not written yet" and "cost nothing" stay distinguishable.
+ */
+const toCost = (row: RunRow) =>
+  row.input_tokens === null && row.output_tokens === null && row.total_tokens === null && row.cost_usd === null
+    ? null
+    : {
+        inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens,
+        reasoningTokens: row.reasoning_tokens,
+        totalTokens: row.total_tokens,
+        costUsd: row.cost_usd === null ? null : Number(row.cost_usd)
+      }
 
 const decode = Schema.decodeUnknown(Run)
 
@@ -57,6 +79,7 @@ export const toRun = (row: RunRow) =>
     state: row.state,
     attempts: row.attempts,
     failureReason: row.failure_reason,
+    cost: toCost(row),
     requestedAt: row.requested_at.toISOString(),
     startedAt: row.started_at?.toISOString() ?? null,
     finishedAt: row.finished_at?.toISOString() ?? null

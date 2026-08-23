@@ -1,8 +1,9 @@
 import { type AiError, LanguageModel } from "@effect/ai"
-import { Effect, Layer, Option } from "effect"
-import { DraftConfig } from "../../../config.ts"
+import { Duration, Effect, Layer, Option, RateLimiter } from "effect"
+import { DraftConfig, ModelCallConfig, ModelPricingConfig } from "../../../config.ts"
 import { isBlank, WrittenDraft } from "../../domain/draft.ts"
 import { instructionFor } from "../../domain/draft-instruction.ts"
+import { costOf } from "../../domain/model-cost.ts"
 import { type DraftBrief, DraftUnavailable, DraftWriter } from "../../domain/ports/draft-writer.ts"
 
 /**
@@ -19,7 +20,10 @@ const toDraftUnavailable = (error: AiError.AiError): DraftUnavailable => {
   switch (error._tag) {
     case "HttpResponseError":
       return new DraftUnavailable({
-        reason: `The model provider answered ${error.response.status}.`,
+        reason:
+          error.response.status === 429
+            ? "The model provider is rate limiting Ara."
+            : `The model provider answered ${error.response.status}.`,
         retryable: isTransientStatus(error.response.status)
       })
     case "HttpRequestError":
@@ -52,12 +56,28 @@ const countOf = (tokens: number | undefined): number | null => (tokens === undef
  * The model that answered is taken from the response where the provider reports
  * it, and from configuration where it does not, so a Draft records what wrote
  * it rather than what was asked to.
+ *
+ * The rate limit and the timeout live here rather than at the call sites, and
+ * that placement is the design: every route to the model goes through this one
+ * function, so "model calls are limited and bounded" is a property of the port
+ * being satisfied at all rather than a discipline each new caller has to keep.
+ * A saturated limiter and a provider that stopped answering both come out of
+ * the timeout as the same thing — a retryable `DraftUnavailable` — because both
+ * are worth trying again in a minute, and neither is worth failing a Run over
+ * on the spot. Doing the trying is the Run lifecycle's job, not this adapter's.
+ *
+ * What a call cost is computed here because pricing is a fact about the
+ * provider, and recorded on the Draft because "what is this habit costing" is a
+ * question asked of Drafts and Runs long after the call is over.
  */
-export const LanguageModelDraftWriterLive = Layer.effect(
+export const LanguageModelDraftWriterLive = Layer.scoped(
   DraftWriter,
   Effect.gen(function* () {
     const { model: configuredModel } = yield* DraftConfig
+    const { interval, limit, requestTimeout } = yield* ModelCallConfig
+    const pricing = yield* ModelPricingConfig
     const languageModel = yield* LanguageModel.LanguageModel
+    const rateLimit = yield* RateLimiter.make({ limit, interval })
 
     const writeDraft = (brief: DraftBrief) =>
       Effect.gen(function* () {
@@ -70,7 +90,18 @@ export const LanguageModelDraftWriterLive = Layer.effect(
               { role: "user", content: instruction.brief }
             ]
           })
-          .pipe(Effect.mapError(toDraftUnavailable))
+          .pipe(
+            Effect.mapError(toDraftUnavailable),
+            rateLimit,
+            Effect.timeoutFail({
+              duration: requestTimeout,
+              onTimeout: () =>
+                new DraftUnavailable({
+                  reason: `The model did not answer within ${Duration.format(requestTimeout)}.`,
+                  retryable: true
+                })
+            })
+          )
 
         if (isBlank(response.text)) {
           return yield* Effect.fail(
@@ -83,12 +114,18 @@ export const LanguageModelDraftWriterLive = Layer.effect(
 
         const reported = response.content.find((part) => part.type === "response-metadata")
 
+        const usage = {
+          inputTokens: countOf(response.usage.inputTokens),
+          outputTokens: countOf(response.usage.outputTokens),
+          reasoningTokens: countOf(response.usage.reasoningTokens),
+          totalTokens: countOf(response.usage.totalTokens)
+        }
+
         return new WrittenDraft({
           body: response.text.trim(),
           model: reported === undefined ? configuredModel : Option.getOrElse(reported.modelId, () => configuredModel),
-          inputTokens: countOf(response.usage.inputTokens),
-          outputTokens: countOf(response.usage.outputTokens),
-          totalTokens: countOf(response.usage.totalTokens)
+          ...usage,
+          costUsd: costOf(usage, pricing)
         })
       })
 

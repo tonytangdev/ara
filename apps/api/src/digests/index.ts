@@ -1,6 +1,6 @@
 import { FetchHttpClient } from "@effect/platform"
 import { Layer } from "effect"
-import { InstallationTokensLive, RepoConnectionRepositoryLive } from "../connections/index.ts"
+import { GithubRateLimiterLive, InstallationTokensLive, RepoConnectionRepositoryLive } from "../connections/index.ts"
 import { BuildDigest } from "./application/build-digest.ts"
 import { CollectDigest } from "./application/collect-digest.ts"
 import { DescribeDigest } from "./application/describe-digest.ts"
@@ -16,6 +16,10 @@ import { PgDigestRepositoryLive } from "./infrastructure/persistence/pg-digest-r
  */
 const RepoActivitySourceLive = GithubRepoActivitySourceLive.pipe(
   Layer.provide(InstallationTokensLive),
+  // The connections module's own limiter, for the same reason as its token
+  // cache: memoization makes this the one budget per installation, and two
+  // limiters would each grant a full quota and so enforce neither.
+  Layer.provide(GithubRateLimiterLive),
   Layer.provide(FetchHttpClient.layer)
 )
 

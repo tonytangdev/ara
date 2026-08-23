@@ -5,6 +5,7 @@ import { Forge } from "../connections/domain/forge.ts"
 import { TimeZone } from "../connections/domain/time-zone.ts"
 import { CalendarDay } from "./domain/day-window.ts"
 import { RunState, Trigger } from "./domain/run.ts"
+import { RunCost } from "./domain/run-cost.ts"
 
 /**
  * What a client asks for: a calendar day, and nothing else. The timezone is
@@ -21,6 +22,10 @@ export class RequestRunRequest extends Schema.Class<RequestRunRequest>("RequestR
  * The Day Window is reported three ways — the day, the zone it was read in, and
  * the instants that produced — because "a calendar day in your timezone" is a
  * claim a client should be able to check rather than take on trust.
+ *
+ * `cost` is here rather than only on the Draft because a User polling a Run is
+ * already holding the id, and what a habit costs should be one request away
+ * from the thing they asked for.
  */
 export class RunResponse extends Schema.Class<RunResponse>("RunResponse")({
   id: Schema.String,
@@ -36,6 +41,12 @@ export class RunResponse extends Schema.Class<RunResponse>("RunResponse")({
   windowStartsAt: Schema.DateTimeUtc,
   windowEndsAt: Schema.DateTimeUtc,
   attempts: Schema.Int,
+  /**
+   * What this Run spent, or null until it has spent anything. Reported on the
+   * Run itself because the Run id is what a User holds: asking what yesterday's
+   * post cost should not mean finding a Draft id first.
+   */
+  cost: Schema.NullOr(RunCost),
   failureReason: Schema.NullOr(Schema.String),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),

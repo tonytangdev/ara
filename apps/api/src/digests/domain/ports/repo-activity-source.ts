@@ -16,12 +16,23 @@ export interface ActivityRequest {
 }
 
 /**
- * The Activity could not be read. One failure covers "GitHub is having a bad
- * minute" and "the App was uninstalled" on purpose: from here they are the same
- * fact, and telling them apart in order to retry differently is #12's job.
+ * The Activity could not be read.
+ *
+ * `retryable` is the only classification the domain makes, and it is made here
+ * because only the adapter can tell a Forge having a bad minute from an App
+ * that was uninstalled. The case it exists for is the one that looks like a
+ * hard failure and is not: a rate limit, Ara's own or GitHub's, means "not
+ * now" rather than "never", and a Run that gave up on it would fail a User for
+ * being busy. What is done about a retryable failure is the Run lifecycle's
+ * business, not this port's; all that is promised here is an honest answer to
+ * "is this worth trying again".
+ *
+ * It defaults to `false`, so a failure has to be argued into being retryable
+ * rather than becoming one by omission.
  */
 export class ActivityUnavailable extends Schema.TaggedError<ActivityUnavailable>()("ActivityUnavailable", {
-  reason: Schema.String
+  reason: Schema.String,
+  retryable: Schema.optionalWith(Schema.Boolean, { default: () => false })
 }) {}
 
 /**

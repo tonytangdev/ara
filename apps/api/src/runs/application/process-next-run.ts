@@ -3,6 +3,7 @@ import { CollectDigest } from "../../digests/index.ts"
 import { WriteDraft } from "../../drafts/index.ts"
 import { JobQueue } from "../domain/ports/job-queue.ts"
 import type { Run } from "../domain/run.ts"
+import { RunCost } from "../domain/run-cost.ts"
 
 /**
  * Driving (inbound) port: claim the next queued Run and take it as far as it
@@ -50,7 +51,29 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
         dayWindow: run.dayWindow
       })
 
-    const draft = (run: Run) => writeDraft.execute({ runId: run.id, userId: run.userId })
+    /**
+     * Write the Draft, and attribute what it cost to the Run.
+     *
+     * The cost is copied from the Draft rather than computed here: the adapter
+     * that made the call is the only thing that knows the provider's prices,
+     * and the Run only has to remember the answer. Recording is a `set`, so a
+     * Run reclaimed after a deploy — which finds its Draft already written and
+     * does not buy another — records the same figure again rather than doubling
+     * it.
+     */
+    const draft = (run: Run) =>
+      Effect.tap(writeDraft.execute({ runId: run.id, userId: run.userId }), (written) =>
+        queue.recordCost(
+          run.id,
+          new RunCost({
+            inputTokens: written.inputTokens,
+            outputTokens: written.outputTokens,
+            reasoningTokens: written.reasoningTokens,
+            totalTokens: written.totalTokens,
+            costUsd: written.costUsd
+          })
+        )
+      )
 
     const process = (run: Run) =>
       Effect.gen(function* () {
@@ -75,7 +98,7 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
         Effect.catchTags({
           ActivityUnavailable: (failure) =>
             Effect.logWarning("Run failed to collect Activity").pipe(
-              Effect.annotateLogs({ runId: run.id, reason: failure.reason }),
+              Effect.annotateLogs({ runId: run.id, reason: failure.reason, retryable: failure.retryable }),
               Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
             ),
           // The model gave nothing usable, and by the time it reaches here the

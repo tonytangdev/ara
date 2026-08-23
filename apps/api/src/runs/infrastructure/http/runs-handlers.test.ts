@@ -274,6 +274,13 @@ interface RunBody {
   readonly attempts: number
   readonly finishedAt: string | null
   readonly repoConnectionId: string | null
+  readonly cost: {
+    readonly inputTokens: number | null
+    readonly outputTokens: number | null
+    readonly reasoningTokens: number | null
+    readonly totalTokens: number | null
+    readonly costUsd: number | null
+  } | null
 }
 
 const connect = (session: string | undefined, owner: string, name: string) =>
@@ -367,6 +374,35 @@ describe("Requesting a Run", () => {
       assert.strictEqual(finished.state, "succeeded")
       assert.strictEqual(finished.attempts, 1)
       assert.isNotNull(finished.finishedAt)
+    }).pipe(Effect.provide(server))
+  )
+
+  it.live("tells the User what the Run cost, thinking included", () =>
+    Effect.gen(function* () {
+      const { connectionId, session } = yield* readyToRun
+
+      const requested = (yield* Effect.flatMap(
+        requestRun(session, connectionId, "2026-08-22"),
+        (response) => response.json
+      )) as RunBody
+
+      // Nothing has been spent yet, and saying "zero" would be a claim rather
+      // than an absence.
+      assert.isNull(requested.cost)
+
+      yield* workUntilEmpty
+
+      const finished = (yield* Effect.flatMap(readRun(session, requested.id), (r) => r.json)) as RunBody
+
+      // The scripted model's usage, all the way through: the port, the Draft,
+      // the Run, and out over HTTP without anybody having to ask for a Draft id.
+      assert.deepStrictEqual(finished.cost, {
+        inputTokens: 1_200,
+        outputTokens: 3_000,
+        reasoningTokens: 2_700,
+        totalTokens: 4_200,
+        costUsd: 0.00822
+      })
     }).pipe(Effect.provide(server))
   )
 

@@ -2,6 +2,7 @@ import { SqlClient } from "@effect/sql"
 import { DateTime, Effect, Layer } from "effect"
 import { JobQueue, type RunRequest } from "../../domain/ports/job-queue.ts"
 import { IN_FLIGHT_STATES, type RunId, type RunOutcome, type RunState } from "../../domain/run.ts"
+import type { RunCost } from "../../domain/run-cost.ts"
 import { type RunRow, runColumns, toRun } from "./run-row.ts"
 
 /** Where a Run is left when a process stops mid-flight; the states `requeueInterrupted` rescues. */
@@ -107,6 +108,17 @@ export const PgJobQueueLive = Layer.effect(
         where id = ${id}
       `).pipe(Effect.orDie)
 
+    const recordCost = (id: RunId, cost: RunCost) =>
+      Effect.asVoid(sql`
+        update runs
+        set input_tokens = ${cost.inputTokens},
+            output_tokens = ${cost.outputTokens},
+            reasoning_tokens = ${cost.reasoningTokens},
+            total_tokens = ${cost.totalTokens},
+            cost_usd = ${cost.costUsd}
+        where id = ${id}
+      `).pipe(Effect.orDie)
+
     const requeueInterrupted = sql<{ readonly id: string }>`
       update runs
       set state = 'queued', started_at = null
@@ -117,6 +129,6 @@ export const PgJobQueueLive = Layer.effect(
       Effect.orDie
     )
 
-    return JobQueue.of({ enqueue, claim, advance, complete, requeueInterrupted })
+    return JobQueue.of({ enqueue, claim, advance, complete, recordCost, requeueInterrupted })
   })
 )

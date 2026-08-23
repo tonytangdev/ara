@@ -3,6 +3,7 @@ import { RepoConnectionId } from "../../connections/domain/repo-connection.ts"
 import { Repository } from "../../connections/domain/repository.ts"
 import { UserId } from "../../connections/domain/user.ts"
 import { DayWindow } from "./day-window.ts"
+import { RunCost } from "./run-cost.ts"
 
 export const RunId = Schema.UUID.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type
@@ -39,6 +40,11 @@ export type Trigger = typeof Trigger.Type
  * nullable and says "the entitlement that authorized this", not "where to read
  * the repository name from".
  *
+ * A Run also carries what it cost. Money is recorded against the Run and not
+ * only against the Draft because the Run is the thing a User asked for and can
+ * name, and "what did this cost me" should not require finding a Draft id
+ * first.
+ *
  * `attempts` counts claims rather than failures: a Run interrupted by a deploy
  * is claimed again, which is what makes an interrupted deploy recoverable and
  * why processing has to be idempotent.
@@ -53,6 +59,12 @@ export class Run extends Schema.Class<Run>("Run")({
   state: RunState,
   attempts: Schema.Int,
   failureReason: Schema.NullOr(Schema.String),
+  /**
+   * What the Run spent, once it has spent anything. Null until the model has
+   * answered — a Run that is still collecting has cost nothing yet, and saying
+   * "zero" would be a claim rather than an absence.
+   */
+  cost: Schema.NullOr(RunCost),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   finishedAt: Schema.NullOr(Schema.DateTimeUtc)
