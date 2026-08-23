@@ -64,3 +64,15 @@ export const WorkerConfig = Config.all({
   /** How long to wait after finding the queue empty. Runs are rare; latency is cheap. */
   pollInterval: Config.duration("WORKER_POLL_INTERVAL").pipe(Config.withDefault(Duration.seconds(1)))
 })
+
+/**
+ * How a Digest is built. Both numbers are thresholds a Day Window has to stay
+ * *under* to count as a Quiet Day: fewer than three commits and under fifty
+ * changed lines. They are configuration rather than constants because the
+ * initial values are a guess, and the honest way to correct a guess is to
+ * watch it fire a few times and move it.
+ */
+export const DigestConfig = Config.all({
+  quietBelowCommits: Config.integer("DIGEST_QUIET_BELOW_COMMITS").pipe(Config.withDefault(3)),
+  quietBelowChangedLines: Config.integer("DIGEST_QUIET_BELOW_CHANGED_LINES").pipe(Config.withDefault(50))
+})

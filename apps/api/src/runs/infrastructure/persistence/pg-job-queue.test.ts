@@ -12,6 +12,7 @@ import { ForgeIdentity } from "../../../connections/domain/user.ts"
 import { PgRepoConnectionRepositoryLive } from "../../../connections/infrastructure/persistence/pg-repo-connection-repository.ts"
 import { PgUserRepositoryLive } from "../../../connections/infrastructure/persistence/pg-user-repository.ts"
 import { MigrationsLive } from "../../../database/index.ts"
+import { collectDigestOver, emptyRepoActivitySource } from "../../../digests/testing/fake-repo-activity.ts"
 import { ProcessNextRun } from "../../application/process-next-run.ts"
 import { makeDayWindow } from "../../domain/day-window.ts"
 import { JobQueue } from "../../domain/ports/job-queue.ts"
@@ -54,7 +55,14 @@ const pool = () =>
 const database = () => MigrationsLive.pipe(Layer.provideMerge(pool()))
 
 /** One worker: the queue, the use case, and its own connection pool. */
-const worker = () => ProcessNextRun.Default.pipe(Layer.provideMerge(PgJobQueueLive), Layer.provideMerge(pool()))
+// The collect stage is real, over a Forge that answers from a fixture: what is
+// under test here is the claim, and a Run still has to be able to finish.
+const worker = () =>
+  ProcessNextRun.Default.pipe(
+    Layer.provide(collectDigestOver(emptyRepoActivitySource)),
+    Layer.provideMerge(PgJobQueueLive),
+    Layer.provideMerge(pool())
+  )
 
 /** Suspended, because the container only has an address once `beforeAll` has run. */
 const seeding = Layer.suspend(() =>

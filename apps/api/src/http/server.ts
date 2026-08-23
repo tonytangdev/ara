@@ -4,6 +4,7 @@ import { NodeHttpServer } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { ServerConfig } from "../config.ts"
 import { ConnectionsLive } from "../connections/index.ts"
+import { DigestsLive } from "../digests/index.ts"
 import { HealthLive } from "../health/index.ts"
 import { RunsLive } from "../runs/index.ts"
 import { AraApi } from "./api.ts"
@@ -18,11 +19,11 @@ import { RequestLogger } from "./logging.ts"
  */
 export const ApiLive = HttpApiBuilder.api(AraApi).pipe(
   Layer.provide(HealthLive),
-  // Runs are always somebody's, so the runs module's endpoints declare the
-  // connections module's authentication middleware. `provideMerge` is what
+  // Runs and Digests are always somebody's, so both modules' endpoints declare
+  // the connections module's authentication middleware. `provideMerge` is what
   // satisfies that: the middleware goes into the runs handlers *and* stays in
   // the layer's output, where the API builder looks for it.
-  Layer.provide(RunsLive.pipe(Layer.provideMerge(ConnectionsLive)))
+  Layer.provide(Layer.mergeAll(RunsLive, DigestsLive).pipe(Layer.provideMerge(ConnectionsLive)))
 )
 
 const NodeServerLive = Layer.unwrapEffect(

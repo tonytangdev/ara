@@ -9,6 +9,7 @@
     "dev": "node --env-file-if-exists=../../.env --watch src/main.ts",
     "start": "node --env-file-if-exists=../../.env dist/main.js",
     "test": "vitest run",
+    "test:contract": "vitest run --config vitest.contract.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

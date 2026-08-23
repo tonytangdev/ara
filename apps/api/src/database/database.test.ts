@@ -9,6 +9,7 @@ import { afterAll, beforeAll } from "vitest"
 import { HealthApiGroup } from "../health/api.ts"
 import { HealthLive } from "../health/index.ts"
 import { MigrationsLive, MigrationsTable } from "./index.ts"
+import { migrations } from "./migrations/index.ts"
 
 /**
  * What these tests drive: the health module over a real Postgres. Scoped to one
@@ -57,7 +58,7 @@ describe("Postgres", () => {
       `
       assert.deepStrictEqual(
         applied.map((row) => row.name),
-        ["schema_foundations", "users_and_sessions", "repo_connections", "runs"]
+        ["schema_foundations", "users_and_sessions", "repo_connections", "runs", "digests"]
       )
 
       const functions = yield* sql`select proname from pg_proc where proname = 'set_updated_at'`
@@ -69,7 +70,8 @@ describe("Postgres", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       const applied = yield* sql`select name from ${sql(MigrationsTable)}`
-      assert.lengthOf(applied, 4)
+      // One row per migration and no more: booting again applied nothing.
+      assert.lengthOf(applied, Object.keys(migrations).length)
     }).pipe(Effect.provide(MigrationsLive.pipe(Layer.provideMerge(disposablePg()))))
   )
 

@@ -25,13 +25,27 @@ import { PgSessionStoreLive } from "./infrastructure/persistence/pg-session-stor
 import { PgUserRepositoryLive } from "./infrastructure/persistence/pg-user-repository.ts"
 
 /**
+ * The token that reads a repository, ready to use.
+ *
+ * Exported because it is the one credential path in the system (ADR-0005) and
+ * other modules need it: the digests module's GitHub adapter mints its token
+ * through this. It is exported as a *layer value* rather than rebuilt per
+ * caller so that layer memoization gives every one of them the same instance —
+ * and therefore one token cache, not one each.
+ */
+export const InstallationTokensLive = GithubInstallationTokensLive.pipe(
+  Layer.provide(GithubAppJwt.Default),
+  Layer.provide(FetchHttpClient.layer)
+)
+
+/**
  * Everything that talks to GitHub, sharing one HTTP client, one App key and —
  * because `InstallationTokens` is merged in rather than only provided — one
  * token cache, so listing repositories does not mint a second token beside the
  * one the rest of the module is already holding.
  */
 const GithubLive = Layer.mergeAll(GithubAuthorizationLive, GithubReachableRepositoriesLive).pipe(
-  Layer.provideMerge(GithubInstallationTokensLive),
+  Layer.provideMerge(InstallationTokensLive),
   Layer.provide(GithubAppJwt.Default),
   Layer.provide(FetchHttpClient.layer)
 )

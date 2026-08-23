@@ -1,4 +1,5 @@
 import { Cause, Effect, Option } from "effect"
+import { CollectDigest } from "../../digests/index.ts"
 import { JobQueue } from "../domain/ports/job-queue.ts"
 import type { Run } from "../domain/run.ts"
 
@@ -19,17 +20,27 @@ import type { Run } from "../domain/run.ts"
 export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("application/runs/ProcessNextRun", {
   effect: Effect.gen(function* () {
     const queue = yield* JobQueue
+    const collectDigest = yield* CollectDigest
 
     /**
-     * The pipeline, deliberately stubbed.
+     * The pipeline: two stages with a persisted Digest between them (ADR-0002),
+     * each one visible to a User polling the Run.
      *
-     * Collecting a Digest (#6) and writing a Draft (#7) replace the bodies of
-     * these two stages. What is real already is the shape they hang off: two
-     * stages with a persisted boundary between them (ADR-0002), each one
-     * visible to a User polling the Run.
+     * Collecting is real. Writing a Draft (#7) still replaces the second body.
+     *
+     * The collect stage is handed the facts it needs rather than the Run
+     * itself: the digests module answers "what happened in this repository,
+     * that day", and owes the runs module nothing beyond that.
      */
     const collect = (run: Run) =>
-      Effect.logDebug("Collecting Activity (stubbed)").pipe(Effect.annotateLogs({ runId: run.id }))
+      collectDigest.execute({
+        runId: run.id,
+        userId: run.userId,
+        repoConnectionId: run.repoConnectionId,
+        repository: run.repository,
+        dayWindow: run.dayWindow
+      })
+
     const draft = (run: Run) =>
       Effect.logDebug("Writing a Draft (stubbed)").pipe(Effect.annotateLogs({ runId: run.id }))
 
@@ -49,8 +60,17 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
           })
         )
       }).pipe(
+        // The one failure that already knows how to explain itself: the
+        // repository could not be read, and why is something the User can
+        // usually act on. It is told to them rather than logged at them.
+        Effect.catchTag("ActivityUnavailable", (failure) =>
+          Effect.logWarning("Run failed to collect Activity").pipe(
+            Effect.annotateLogs({ runId: run.id, reason: failure.reason }),
+            Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
+          )
+        ),
         // A Run that blows up has to stop being in flight, or it is unclaimable
-        // and unexplainable at once. What a User is told about the failure is
+        // and unexplainable at once. What a User is told about the rest is
         // still thin here; #12 is where a failure learns to explain itself.
         Effect.catchAllCause((cause) =>
           // Being interrupted is not the Run failing. The shutdown is what

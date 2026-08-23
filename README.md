@@ -26,8 +26,18 @@ The same process runs the HTTP API and the background worker that claims queued
 Runs, so the MVP is one thing to deploy. Set `WORKER_ENABLED=false` to run an
 instance that only serves HTTP.
 
+A Run reads the day's Activity from GitHub, builds a Digest of what actually
+happened — commit subjects, file paths and line counts, never diffs — and stores
+it. `GET /v1/runs/:id/digest` is what that Run decided.
+
 Scripts at the root fan out to every workspace package: `pnpm build`, `pnpm dev`,
 `pnpm test`, `pnpm lint`, `pnpm typecheck`.
+
+`pnpm test` never touches the network. The contract tests, which read a real
+repository from GitHub to catch it changing the shape of a reply, are excluded
+from it and from CI; run them by hand with
+`pnpm --filter @ara/api test:contract` once the `CONTRACT_GITHUB_*` variables in
+`.env` point at a scratch repository.
 
 ## Adding a package
 

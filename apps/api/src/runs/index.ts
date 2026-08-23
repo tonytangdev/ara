@@ -1,5 +1,6 @@
 import { Layer } from "effect"
 import { RepoConnectionRepositoryLive } from "../connections/index.ts"
+import { CollectDigestLive } from "../digests/index.ts"
 import { DescribeRun } from "./application/describe-run.ts"
 import { ListRuns } from "./application/list-runs.ts"
 import { ProcessNextRun } from "./application/process-next-run.ts"
@@ -36,6 +37,9 @@ export const RunsLive = RunsHandlersLive.pipe(
 /** The worker: the same use cases, driven by a loop instead of by HTTP. */
 export const RunsWorkerLive = RunWorkerLive.pipe(
   Layer.provide(Layer.mergeAll(ProcessNextRun.Default, RequeueInterruptedRuns.Default)),
+  // The collect stage of a Run belongs to the digests module, which is why it
+  // arrives here as one wired layer rather than as a GitHub client and a table.
+  Layer.provide(CollectDigestLive),
   Layer.provide(DrivenLive)
 )
 
