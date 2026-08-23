@@ -21,6 +21,7 @@ src/
       system/process-system-probe.ts   driven adapter (Node `process`)
   http/
     api.ts                     composes each module's group into one HttpApi
+    docs.ts                    serves that HttpApi as Scalar reference docs
     server.ts                  composes each module's layers, then listens
   config.ts
   main.ts                      composition root
@@ -38,6 +39,11 @@ Adding a feature means adding one folder plus two lines in `http/`.
 | Method | Path      | Description                                                     |
 | ------ | --------- | --------------------------------------------------------------- |
 | GET    | `/health` | `200` with the health report, `503` when a dependency is down.   |
+| GET    | `/docs`   | Scalar API reference, generated from the `HttpApi` definition.  |
+
+The OpenAPI document is derived from the endpoint schemas, so documenting a new
+route means annotating it in the module's `api.ts` — nothing to keep in sync.
+Scalar's script is inlined from `@effect/platform`, so the page loads offline.
 
 ## Scripts
 

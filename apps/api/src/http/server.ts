@@ -5,6 +5,7 @@ import { Effect, Layer } from "effect"
 import { ServerConfig } from "../config.ts"
 import { HealthLive } from "../health/index.ts"
 import { AraApi } from "./api.ts"
+import { DocsLive } from "./docs.ts"
 
 /** The API implementation: every module, wired. Add new modules here. */
 export const ApiLive = HttpApiBuilder.api(AraApi).pipe(Layer.provide(HealthLive))
@@ -15,6 +16,7 @@ const NodeServerLive = Layer.unwrapEffect(
 
 /** Everything needed to actually listen on a socket. */
 export const HttpLive = HttpApiBuilder.serve(HttpMiddleware.logger).pipe(
+  Layer.provide(DocsLive),
   Layer.provide(ApiLive),
   HttpServer.withLogAddress,
   Layer.provide(NodeServerLive)
