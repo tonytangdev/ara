@@ -1,6 +1,7 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
 import { Schema } from "effect"
 import { SessionAuthentication } from "../connections/api.ts"
+import { DraftShape } from "./domain/draft.ts"
 
 /**
  * The Draft a Run wrote, with what it cost attached.
@@ -13,11 +14,17 @@ import { SessionAuthentication } from "../connections/api.ts"
  * `digestId` is here so that "why did it write that?" leads somewhere: the
  * Digest it was written from is a request away, and it is the only thing the
  * model was given.
+ *
+ * `shape` is what makes a Quiet Draft identifiable as one. A short post is not
+ * self-evidently a Quiet Draft — it could just be a short post — so the reader
+ * is told which of the two shapes was asked for, and the Digest's own `isQuiet`
+ * says why.
  */
 export class DraftResponse extends Schema.Class<DraftResponse>("DraftResponse")({
   id: Schema.String,
   runId: Schema.String,
   digestId: Schema.String,
+  shape: DraftShape,
   body: Schema.String,
   model: Schema.String,
   inputTokens: Schema.NullOr(Schema.Int),

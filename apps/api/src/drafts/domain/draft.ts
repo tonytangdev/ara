@@ -15,6 +15,32 @@ export type DraftId = typeof DraftId.Type
 export const FULL_DRAFT_WORDS = { min: 150, max: 250 } as const
 
 /**
+ * How long a Quiet Draft should run to.
+ *
+ * Short on purpose, and the shortness is the correctness measure. The prototype
+ * held the full range over a thin Digest and watched the model fill the gap with
+ * things that never happened — files nobody touched, a motivation nobody had, an
+ * arc from a morning of two commits. Forty to ninety words is about as much as a
+ * light day can honestly carry, so it is what a light day is asked for.
+ */
+export const QUIET_DRAFT_WORDS = { min: 40, max: 90 } as const
+
+/**
+ * Which of the two shapes a Draft took (CONTEXT: Draft, Quiet Draft).
+ *
+ * Not a style flag. The shape follows deterministically from the Digest's own
+ * `isQuiet`, which was decided before any model was called, and it is carried on
+ * the Draft so that a Quiet Draft is identifiable as one when it is read back
+ * rather than something a reader has to infer from its length.
+ */
+export const DraftShape = Schema.Literal("full", "quiet")
+export type DraftShape = typeof DraftShape.Type
+
+/** How long a Draft of this shape was asked to run to. */
+export const wordsFor = (shape: DraftShape): { readonly min: number; readonly max: number } =>
+  shape === "quiet" ? QUIET_DRAFT_WORDS : FULL_DRAFT_WORDS
+
+/**
  * Prose the model did not actually write.
  *
  * The model sometimes answers with reasoning and no message content. That is
@@ -60,6 +86,8 @@ export class StoredDraft extends Schema.Class<StoredDraft>("StoredDraft")({
   id: Schema.UUID,
   runId: Schema.UUID,
   digestId: Schema.UUID,
+  /** Full or Quiet, read from the Digest it was written from rather than guessed at from the prose. */
+  shape: DraftShape,
   body: Schema.String,
   model: Schema.String,
   inputTokens: Schema.NullOr(Schema.Int),

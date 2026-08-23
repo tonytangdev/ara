@@ -9,7 +9,7 @@ import {
   PullRequestSummary
 } from "../../digests/domain/digest.ts"
 import { CalendarDay } from "../../runs/domain/day-window.ts"
-import { FULL_DRAFT_WORDS } from "./draft.ts"
+import { FULL_DRAFT_WORDS, QUIET_DRAFT_WORDS } from "./draft.ts"
 import { instructionFor } from "./draft-instruction.ts"
 
 const A_DAY = new Digest({
@@ -97,5 +97,61 @@ describe("What the model is told about a day", () => {
     // Paths and counts, never contents: every commit line names files and says
     // nothing about what is in them.
     assert.include(brief, "- Add the collect stage [src/digests/collect.ts, README.md]")
+  })
+})
+
+/**
+ * The Quiet Day, at the seam where it changes what the model is asked.
+ *
+ * The decision itself is not made here — it was made when the Digest was built,
+ * deterministically and before anything was called. What these tests hold is
+ * that the decision is *acted on*: a light day is asked for a shorter post, told
+ * it may say the day was light, and told not to fill the space anyway.
+ */
+describe("What the model is told about a Quiet Day", () => {
+  const A_LIGHT_DAY = new Digest({
+    ...A_DAY,
+    commitCount: 1,
+    commits: [new CommitSummary({ subject: "Fix the day boundary", files: ["src/runs/day-window.ts"] })],
+    pullRequests: [],
+    totals: new DigestTotals({ filesTouched: 1, additions: 6, deletions: 2 }),
+    topAreas: [new AreaChurn({ dir: "src/runs", churn: 8 })],
+    topFiles: [new FileChurn({ path: "src/runs/day-window.ts", additions: 6, deletions: 2 })],
+    isQuiet: true
+  })
+
+  it("asks for a Quiet Draft, and says so in the shape", () => {
+    assert.strictEqual(instructionFor(A_LIGHT_DAY).shape, "quiet")
+    assert.strictEqual(instructionFor(A_DAY).shape, "full")
+  })
+
+  it("asks for far fewer words than a full Draft", () => {
+    const { voice } = instructionFor(A_LIGHT_DAY)
+
+    assert.include(voice, `${QUIET_DRAFT_WORDS.min} to ${QUIET_DRAFT_WORDS.max} words`)
+    // The floor that makes a model invent on thin material is nowhere near it.
+    assert.notInclude(voice, `${FULL_DRAFT_WORDS.min} to ${FULL_DRAFT_WORDS.max} words`)
+    assert.isBelow(QUIET_DRAFT_WORDS.max, FULL_DRAFT_WORDS.min)
+  })
+
+  it("permits the day to have been light, and forbids padding it", () => {
+    const { voice } = instructionFor(A_LIGHT_DAY)
+
+    assert.include(voice, "This was a light day")
+    assert.include(voice, "not apologetic")
+    assert.include(voice, "Do not pad")
+    assert.include(voice, "Stopping early is better than padding")
+    // The honesty rules the full voice carries are not traded away for the
+    // permission: a shorter post is still not allowed to invent.
+    assert.include(voice, "Never invent")
+  })
+
+  it("still puts the day's own facts in front of it, and only those", () => {
+    const { brief } = instructionFor(A_LIGHT_DAY)
+
+    assert.include(brief, "Commits (1):")
+    assert.include(brief, "- Fix the day boundary [src/runs/day-window.ts]")
+    assert.include(brief, "1 files touched, +6 / -2 lines")
+    assert.notInclude(brief, "Add the collect stage")
   })
 })

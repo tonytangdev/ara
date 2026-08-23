@@ -43,5 +43,5 @@ export const WriteDraftLive = WriteDraft.Default.pipe(
 
 export { DraftResponse, DraftsApiGroup, NoSuchDraft } from "./api.ts"
 export { WriteDraft } from "./application/write-draft.ts"
-export { StoredDraft, WrittenDraft } from "./domain/draft.ts"
+export { DraftShape, QUIET_DRAFT_WORDS, StoredDraft, WrittenDraft } from "./domain/draft.ts"
 export { DraftWriter } from "./domain/ports/draft-writer.ts"

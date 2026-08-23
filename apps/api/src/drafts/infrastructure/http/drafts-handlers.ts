@@ -12,6 +12,7 @@ const toResponse = (draft: StoredDraft) =>
     id: draft.id,
     runId: draft.runId,
     digestId: draft.digestId,
+    shape: draft.shape,
     body: draft.body,
     model: draft.model,
     inputTokens: draft.inputTokens,

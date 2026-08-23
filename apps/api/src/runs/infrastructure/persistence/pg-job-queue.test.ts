@@ -12,7 +12,7 @@ import { ForgeIdentity } from "../../../connections/domain/user.ts"
 import { PgRepoConnectionRepositoryLive } from "../../../connections/infrastructure/persistence/pg-repo-connection-repository.ts"
 import { PgUserRepositoryLive } from "../../../connections/infrastructure/persistence/pg-user-repository.ts"
 import { MigrationsLive } from "../../../database/index.ts"
-import { collectDigestOver, emptyRepoActivitySource } from "../../../digests/testing/fake-repo-activity.ts"
+import { busyRepoActivitySource, collectDigestOver } from "../../../digests/testing/fake-repo-activity.ts"
 import { passableDraftStage } from "../../../drafts/testing/fake-draft-writer.ts"
 import { ProcessNextRun } from "../../application/process-next-run.ts"
 import { makeDayWindow } from "../../domain/day-window.ts"
@@ -60,7 +60,7 @@ const database = () => MigrationsLive.pipe(Layer.provideMerge(pool()))
 // under test here is the claim, and a Run still has to be able to finish.
 const worker = () =>
   ProcessNextRun.Default.pipe(
-    Layer.provide(Layer.mergeAll(collectDigestOver(emptyRepoActivitySource), passableDraftStage)),
+    Layer.provide(Layer.mergeAll(collectDigestOver(busyRepoActivitySource), passableDraftStage)),
     Layer.provideMerge(PgJobQueueLive),
     Layer.provideMerge(pool())
   )

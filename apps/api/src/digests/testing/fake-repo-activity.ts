@@ -1,8 +1,8 @@
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { RepoConnectionRepositoryLive } from "../../connections/index.ts"
 import { BuildDigest } from "../application/build-digest.ts"
 import { CollectDigest } from "../application/collect-digest.ts"
-import { RepositoryActivity } from "../domain/activity.ts"
+import { CommitActivity, FileChange, RepositoryActivity } from "../domain/activity.ts"
 import { type ActivityRequest, RepoActivitySource } from "../domain/ports/repo-activity-source.ts"
 import { PgDigestRepositoryLive } from "../infrastructure/persistence/pg-digest-repository.ts"
 
@@ -23,6 +23,36 @@ export const repoActivitySourceOf = (activity: (request: ActivityRequest) => Rep
 /** A day on which nothing at all happened. A Digest, and never a failure. */
 export const emptyRepoActivitySource = repoActivitySourceOf(
   ({ dayWindow, repository }) => new RepositoryActivity({ repository, dayWindow, commits: [], pullRequests: [] })
+)
+
+const busyCommit = (sha: string, subject: string, path: string, additions: number) =>
+  new CommitActivity({
+    sha,
+    subject,
+    committedAt: DateTime.unsafeMake("2026-08-22T10:00:00.000Z"),
+    authorLogin: "octocat",
+    authorIsBot: false,
+    parentCount: 1,
+    files: [new FileChange({ path, additions, deletions: 2 })]
+  })
+
+/**
+ * A day with enough work in it to carry a full Draft: three commits and well
+ * over fifty changed lines, so it is over the Quiet Day threshold on both
+ * counts. What the tests that are about the Run spine rather than the day want.
+ */
+export const busyRepoActivitySource = repoActivitySourceOf(
+  ({ dayWindow, repository }) =>
+    new RepositoryActivity({
+      repository,
+      dayWindow,
+      commits: [
+        busyCommit("aaa", "Add the collect stage", "src/digests/collect.ts", 80),
+        busyCommit("bbb", "Test the collect stage", "src/digests/collect.test.ts", 120),
+        busyCommit("ccc", "Write the Draft stage", "src/drafts/write-draft.ts", 90)
+      ],
+      pullRequests: []
+    })
 )
 
 /** The collect stage, reading from a fixture and writing to a real database. */
