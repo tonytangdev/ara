@@ -1,8 +1,11 @@
-import { Cause, Effect, Option } from "effect"
+import { Effect, Option, Random } from "effect"
+import { RunConfig } from "../../config.ts"
 import { CollectDigest } from "../../digests/index.ts"
 import { WriteDraft } from "../../drafts/index.ts"
 import { JobQueue } from "../domain/ports/job-queue.ts"
+import { backoffFor, hasAttemptsLeft } from "../domain/retry-policy.ts"
 import type { Run } from "../domain/run.ts"
+import { failureIn, finalReason, type RunFailure, type RunStage, unexpectedFailureIn } from "../domain/run-failure.ts"
 
 /**
  * Driving (inbound) port: claim the next queued Run and take it as far as it
@@ -17,9 +20,16 @@ import type { Run } from "../domain/run.ts"
  * Claiming is what makes two workers safe, not a lock held here: `JobQueue.claim`
  * hands a Run to at most one caller and marks it as taken in the same breath
  * (ADR-0001).
+ *
+ * Recovery lives here too, and only here. Each driven port classifies its own
+ * failures — only the adapter that made the call can tell a rate limit from a
+ * revoked key — and this use case is what acts on the classification: retry a
+ * transient failure, stop on a terminal one, and either way end with something
+ * the User can read.
  */
 export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("application/runs/ProcessNextRun", {
   effect: Effect.gen(function* () {
+    const { maxAttempts, retryBaseDelay, retryMaxDelay } = yield* RunConfig
     const queue = yield* JobQueue
     const collectDigest = yield* CollectDigest
     const writeDraft = yield* WriteDraft
@@ -42,20 +52,38 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
      * a full one — is #8.
      */
     const collect = (run: Run) =>
-      collectDigest.execute({
-        runId: run.id,
-        userId: run.userId,
-        repoConnectionId: run.repoConnectionId,
-        repository: run.repository,
-        dayWindow: run.dayWindow
-      })
+      collectDigest
+        .execute({
+          runId: run.id,
+          userId: run.userId,
+          repoConnectionId: run.repoConnectionId,
+          repository: run.repository,
+          dayWindow: run.dayWindow
+        })
+        .pipe(Effect.mapError((failure) => failureIn("collecting", failure)))
 
-    const draft = (run: Run) => writeDraft.execute({ runId: run.id, userId: run.userId })
+    const draft = (run: Run) =>
+      writeDraft
+        .execute({ runId: run.id, userId: run.userId })
+        .pipe(Effect.mapError((failure) => failureIn("drafting", failure)))
 
-    const process = (run: Run) =>
+    /**
+     * One attempt at a Run, resuming at the stage the last attempt stopped in.
+     *
+     * A retry of the Draft stage does not read the Forge again, which is the
+     * whole point of persisting the Digest between the stages: a model that
+     * answers with nothing costs one more model call and no more Forge calls.
+     * Starting from the collect stage is safe too — collecting twice leaves one
+     * Digest, and a Run that already has a Draft is left alone — because a Run
+     * is claimed more than once whenever a deploy interrupts one.
+     */
+    const attempt = (run: Run, from: RunStage) =>
       Effect.gen(function* () {
-        yield* collect(run)
-        yield* queue.advance(run.id, "drafting")
+        if (from === "collecting") {
+          yield* collect(run)
+          yield* queue.advance(run.id, "drafting")
+        }
+
         yield* draft(run)
         yield* queue.complete(run.id, { state: "succeeded" })
 
@@ -68,40 +96,74 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
           })
         )
       }).pipe(
-        // The failures that already know how to explain themselves: the
-        // repository could not be read, or the model wrote nothing. Why is
-        // something the User can usually act on, so it is told to them rather
-        // than logged at them.
-        Effect.catchTags({
-          ActivityUnavailable: (failure) =>
-            Effect.logWarning("Run failed to collect Activity").pipe(
-              Effect.annotateLogs({ runId: run.id, reason: failure.reason }),
-              Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
-            ),
-          // The model gave nothing usable, and by the time it reaches here the
-          // retryable ones have already been retried. A Run fails without a
-          // Draft rather than succeeding with an empty one.
-          DraftUnavailable: (failure) =>
-            Effect.logWarning("Run failed to write a Draft").pipe(
-              Effect.annotateLogs({ runId: run.id, reason: failure.reason, retryable: failure.retryable }),
-              Effect.zipRight(queue.complete(run.id, { state: "failed", reason: failure.reason }))
-            )
-        }),
-        // A Run that blows up has to stop being in flight, or it is unclaimable
-        // and unexplainable at once. What a User is told about the rest is
-        // still thin here; #12 is where a failure learns to explain itself.
-        Effect.catchAllCause((cause) =>
-          // Being interrupted is not the Run failing. The shutdown is what
-          // happened, and the Run is left in flight for the next boot to
-          // requeue rather than being reported to its User as a failure.
-          Cause.isInterruptedOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logError("Run failed", cause).pipe(
-                Effect.annotateLogs({ runId: run.id }),
-                Effect.zipRight(queue.complete(run.id, { state: "failed", reason: "The Run did not finish" }))
-              )
+        // A defect is the one failure no port described, so it is the one
+        // failure with nothing to tell the User. It is logged in full and
+        // turned into a Run failure that says as much, rather than being left
+        // to escape and strand the Run in flight. Interruption is not a defect
+        // and passes straight through: a deploy is not a Run failing.
+        Effect.catchAllDefect((defect) =>
+          Effect.logError("Run broke", defect).pipe(
+            Effect.annotateLogs({ runId: run.id, stage: from }),
+            Effect.zipRight(Effect.fail(unexpectedFailureIn(from)))
+          )
         )
       )
+
+    const giveUp = (run: Run, failure: RunFailure, attempts: number) =>
+      Effect.logWarning("Run failed").pipe(
+        Effect.annotateLogs({
+          runId: run.id,
+          stage: failure.stage,
+          kind: failure.kind,
+          attempts,
+          reason: failure.reason
+        }),
+        Effect.zipRight(queue.complete(run.id, { state: "failed", reason: finalReason(failure, attempts) }))
+      )
+
+    /**
+     * Attempt, and on a transient failure wait and attempt again — up to the
+     * ceiling, after which the Run lands in `failed` and stops.
+     *
+     * The Run stays in flight for the whole of the backoff rather than going
+     * back on the queue, because this worker has not let go of it and a Run
+     * that looked queued here would be claimed by a second worker mid-wait.
+     * The sleep is interruptible on purpose: a deploy that lands in a backoff
+     * should stop rather than wait it out, and the Run it leaves mid-flight is
+     * exactly what the next boot requeues.
+     */
+    const process = (run: Run) => {
+      const go = (from: RunStage, attempts: number): Effect.Effect<void> =>
+        attempt(run, from).pipe(
+          Effect.catchAll((failure) =>
+            failure.kind === "terminal" || !hasAttemptsLeft(attempts, maxAttempts)
+              ? giveUp(run, failure, attempts)
+              : Effect.gen(function* () {
+                  const delay = backoffFor(attempts, retryBaseDelay, retryMaxDelay, yield* Random.next)
+
+                  yield* Effect.logInfo("Run failed and will be tried again").pipe(
+                    Effect.annotateLogs({
+                      runId: run.id,
+                      stage: failure.stage,
+                      attempts,
+                      in: `${delay}`,
+                      reason: failure.reason
+                    })
+                  )
+
+                  yield* Effect.interruptible(Effect.sleep(delay))
+
+                  return yield* go(failure.stage, yield* queue.recordAttempt(run.id, failure.stage))
+                })
+          )
+        )
+
+      // The claim has already counted this attempt, so the Run arrives holding
+      // its own attempt number — including the ones a crash and a requeue made
+      // in an earlier process. A Run that has been picked up and dropped five
+      // times has had its five attempts wherever they happened.
+      return go("collecting", run.attempts)
+    }
 
     const execute: Effect.Effect<Option.Option<Run>> = Effect.gen(function* () {
       const claimed = yield* queue.claim

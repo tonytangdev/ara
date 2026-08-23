@@ -66,6 +66,23 @@ export const WorkerConfig = Config.all({
 })
 
 /**
+ * How a Run recovers.
+ *
+ * One policy for the whole Run rather than one per stage, because the ceiling
+ * has to mean something: two stages retrying five times each is twenty-five
+ * attempts, and the Forge reads and model calls that go with them. A Run gets
+ * `maxAttempts` attempts in total, wherever it keeps stopping.
+ */
+export const RunConfig = Config.all({
+  /** Total attempts, not retries. Five is the spec's ceiling for a transient failure. */
+  maxAttempts: Config.integer("RUN_MAX_ATTEMPTS").pipe(Config.withDefault(5)),
+  /** The first backoff; each attempt doubles it, with jitter. */
+  retryBaseDelay: Config.duration("RUN_RETRY_BASE_DELAY").pipe(Config.withDefault(Duration.seconds(2))),
+  /** Where doubling stops. A Run is not in a hurry, but nor is anybody waiting an hour. */
+  retryMaxDelay: Config.duration("RUN_RETRY_MAX_DELAY").pipe(Config.withDefault(Duration.minutes(2)))
+})
+
+/**
  * How a Digest is built. Both numbers are thresholds a Day Window has to stay
  * *under* to count as a Quiet Day: fewer than three commits and under fifty
  * changed lines. They are configuration rather than constants because the
@@ -82,16 +99,12 @@ export const DigestConfig = Config.all({
  * wrote a Draft is a question a User can ask of the answer (#31), and comparing
  * two models has to be a deployment change rather than an edit.
  *
- * The attempt bounds belong to the Draft rather than to the provider, because
- * the failure they exist for is not the provider's fault: a model that answers
- * with reasoning and no content has returned a perfectly good HTTP 200.
+ * Retrying a model that answered with nothing is not configured here: it is one
+ * of the transient failures a Run recovers from, and the bound on it belongs to
+ * the Run — see `RunConfig`.
  */
 export const DraftConfig = Config.all({
-  model: Config.string("DRAFT_MODEL").pipe(Config.withDefault("moonshotai/kimi-k3")),
-  /** Total attempts, not retries. Five is the spec's ceiling for a transient failure. */
-  maxAttempts: Config.integer("DRAFT_MAX_ATTEMPTS").pipe(Config.withDefault(5)),
-  /** The first backoff; each attempt doubles it, with jitter. */
-  retryBaseDelay: Config.duration("DRAFT_RETRY_BASE_DELAY").pipe(Config.withDefault(Duration.seconds(2)))
+  model: Config.string("DRAFT_MODEL").pipe(Config.withDefault("moonshotai/kimi-k3"))
 })
 
 /**

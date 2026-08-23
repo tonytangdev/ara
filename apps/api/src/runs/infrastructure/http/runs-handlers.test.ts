@@ -40,7 +40,11 @@ import { PgRepoConnectionRepositoryLive } from "../../../connections/infrastruct
 import { PgSessionStoreLive } from "../../../connections/infrastructure/persistence/pg-session-store.ts"
 import { PgUserRepositoryLive } from "../../../connections/infrastructure/persistence/pg-user-repository.ts"
 import { MigrationsLive } from "../../../database/index.ts"
-import { collectDigestOver, emptyRepoActivitySource } from "../../../digests/testing/fake-repo-activity.ts"
+import {
+  collectDigestOver,
+  emptyRepoActivitySource,
+  unreachableRepoActivitySource
+} from "../../../digests/testing/fake-repo-activity.ts"
 import { passableDraftStage } from "../../../drafts/testing/fake-draft-writer.ts"
 import { RequestLogger } from "../../../http/logging.ts"
 import { RunsApiGroup } from "../../api.ts"
@@ -272,6 +276,7 @@ interface RunBody {
   readonly windowStartsAt: string
   readonly windowEndsAt: string
   readonly attempts: number
+  readonly failureReason: string | null
   readonly finishedAt: string | null
   readonly repoConnectionId: string | null
 }
@@ -516,5 +521,49 @@ describe("Listing Runs", () => {
         [second.id, first.id]
       )
     }).pipe(Effect.provide(server))
+  )
+})
+
+/**
+ * The same API, over a Forge that will not let Ara in. Everything else is the
+ * server above: real handlers, real use cases, one faked driven port.
+ */
+const serverThatCannotRead = Layer.suspend(() =>
+  HttpApiBuilder.serve(RequestLogger).pipe(
+    Layer.provide(HttpApiBuilder.api(RunsAndConnectionsApi).pipe(Layer.provide(UnderTest))),
+    Layer.provideMerge(
+      ProcessNextRun.Default.pipe(
+        Layer.provide(Layer.mergeAll(collectDigestOver(unreachableRepoActivitySource), passableDraftStage)),
+        Layer.provide(PgJobQueueLive)
+      )
+    ),
+    Layer.provideMerge(database()),
+    Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provide(TestConfig)
+  )
+)
+
+describe("A Run that failed", () => {
+  it.live("says what went wrong where the User can read it, rather than only in the logs", () =>
+    Effect.gen(function* () {
+      const { connectionId, session } = yield* readyToRun
+
+      const requested = (yield* Effect.flatMap(
+        requestRun(session, connectionId, "2026-08-22"),
+        (response) => response.json
+      )) as RunBody
+
+      yield* workUntilEmpty
+
+      const failed = (yield* Effect.flatMap(readRun(session, requested.id), (r) => r.json)) as RunBody
+
+      assert.strictEqual(failed.state, "failed")
+      assert.isNotNull(failed.finishedAt)
+      // Something the User can act on — reconnect the repository — and not a stack trace.
+      assert.include(failed.failureReason ?? "", "Ara can no longer reach octocat/ara")
+      // Terminal, so it stopped at once rather than spending five attempts
+      // discovering that revoked access is still revoked.
+      assert.strictEqual(failed.attempts, 1)
+    }).pipe(Effect.provide(serverThatCannotRead))
   )
 })

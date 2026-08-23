@@ -1,5 +1,5 @@
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { HttpClient, type HttpClientError, HttpClientRequest, HttpClientResponse } from "@effect/platform"
+import { DateTime, Effect, Layer, type ParseResult, Schema } from "effect"
 import { GithubAppConfig } from "../../../config.ts"
 import { Installation } from "../../../connections/domain/installation.ts"
 import { InstallationTokens } from "../../../connections/domain/ports/installation-tokens.ts"
@@ -109,12 +109,43 @@ export const GithubRepoActivitySourceLive = Layer.effect(
       readonly installationExternalId: string
     }) =>
       Effect.gen(function* () {
+        const named = `${repository.owner}/${repository.name}`
+
+        /** Ara's access, or the repository itself, is gone. Waiting changes nothing. */
         const unreadable = (what: string) =>
           new ActivityUnavailable({
             reason:
-              `GitHub would not say ${what} for ${repository.owner}/${repository.name}. ` +
-              "The repository may have been removed, or Ara's access to it revoked."
+              `GitHub would not say ${what} for ${named}. ` +
+              "The repository may have been removed, or Ara's access to it revoked.",
+            retryable: false
           })
+
+        /** GitHub is having a bad minute: rate limited, unwell, or unreachable. Worth another go. */
+        const busy = (what: string) =>
+          new ActivityUnavailable({
+            reason: `GitHub could not say ${what} for ${named} just now. It may be busy or having trouble.`,
+            retryable: true
+          })
+
+        /** GitHub answered, in a shape Ara does not know. Retrying reads the same surprise again. */
+        const unfamiliar = (what: string) =>
+          new ActivityUnavailable({
+            reason: `GitHub answered about ${what} for ${named} in a shape Ara did not understand.`,
+            retryable: false
+          })
+
+        /**
+         * The one place a Run's recovery is decided, because it is the only
+         * place that knows what GitHub said. A rate limit or a 5xx is a bad
+         * minute; a 401, 403 or 404 is an answer, and the answer is no.
+         */
+        const classify = (error: HttpClientError.HttpClientError | ParseResult.ParseError, what: string) => {
+          if (error._tag === "ParseError") return unfamiliar(what)
+          if (error._tag === "RequestError") return busy(what)
+
+          const { status } = error.response
+          return status === 429 || status >= 500 ? busy(what) : unreadable(what)
+        }
 
         // `tokenFor` keys on the installation's own id; the account login is
         // carried for logs, and the repository's owner is the truest thing
@@ -127,7 +158,9 @@ export const GithubRepoActivitySourceLive = Layer.effect(
               accountLogin: repository.owner
             })
           )
-          .pipe(Effect.mapError((failure) => new ActivityUnavailable({ reason: failure.reason })))
+          // Terminal: an installation token that cannot be minted at all is an
+          // installation that is no longer there to mint one for.
+          .pipe(Effect.mapError((failure) => new ActivityUnavailable({ reason: failure.reason, retryable: false })))
 
         const read = <A, I>(path: string, params: Record<string, string>, schema: Schema.Schema<A, I>, what: string) =>
           HttpClientRequest.get(new URL(path, apiBaseUrl)).pipe(
@@ -137,7 +170,7 @@ export const GithubRepoActivitySourceLive = Layer.effect(
             client.execute,
             Effect.flatMap(HttpClientResponse.filterStatusOk),
             Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
-            Effect.mapError(() => unreadable(what)),
+            Effect.mapError((error) => classify(error, what)),
             Effect.scoped
           )
 

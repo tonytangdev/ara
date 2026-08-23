@@ -128,3 +128,27 @@ describe("The worker's lifecycle", () => {
     }).pipe(Effect.provide(fixtures))
   )
 })
+
+describe("A Run a crash left mid-flight", () => {
+  it.live("is picked up when the worker next starts, rather than stranded", () =>
+    Effect.gen(function* () {
+      const queue = yield* JobQueue
+      const abandoned = yield* queueARun("2026-08-22")
+
+      // A worker claimed this Run and the process went down holding it. Nothing
+      // will ever claim it again: it is not queued, and nobody is working on it.
+      yield* queue.claim
+      assert.strictEqual(yield* stateOf(abandoned.id), "collecting")
+
+      // Starting the application is the whole of the recovery.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(worker())
+          yield* Effect.repeat(stateOf(abandoned.id), { until: (state) => state === "succeeded" })
+        })
+      )
+
+      assert.strictEqual(yield* stateOf(abandoned.id), "succeeded")
+    }).pipe(Effect.provide(fixtures))
+  )
+})
