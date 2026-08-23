@@ -1,0 +1,27 @@
+24 calls to make (0 already done)
+FAIL tonytangdev-v2 2026-06-07 arm A Cannot read properties of null (reading 'trim')
+ok   tonytangdev-v2 2026-06-07 arm C 19389->1379 tok
+ok   tonytangdev-v2 2026-06-06 arm C 16591->1614 tok
+ok   tonytangdev-v2 2026-06-07 arm B 3082->2211 tok
+ok   tonytangdev-v2 2026-06-06 arm B 1339->2348 tok
+ok   tonytangdev-v2 2026-06-08 arm C 5626->645 tok
+ok   tonytangdev-v2 2026-06-06 arm A 941->2734 tok
+ok   tonytangdev-v2 2026-06-08 arm A 425->1136 tok
+ok   tonytangdev-v2 2026-06-08 arm B 597->1907 tok
+ok   tonytangdev-v2 2026-06-09 arm A 753->1856 tok
+ok   tonytangdev-v2 2026-07-04 arm A 847->2490 tok
+ok   tonytangdev-v2 2026-06-09 arm B 1256->1419 tok
+ok   tonytangdev-v2 2026-07-04 arm C 16856->1165 tok
+ok   easy-chores 2026-07-05 arm A 2726->2554 tok
+ok   easy-chores 2026-07-05 arm B 2319->1897 tok
+ok   tonytangdev-v2 2026-06-09 arm C 17007->7111 tok
+ok   tonytangdev-v2 2026-07-04 arm B 1037->2715 tok
+ok   easy-chores 2026-07-12 arm B 2284->2341 tok
+ok   easy-chores 2026-07-05 arm C 17282->4716 tok
+ok   rising-stars 2026-07-19 arm B 3555->2068 tok
+ok   easy-chores 2026-07-12 arm C 18142->2479 tok
+ok   rising-stars 2026-07-19 arm A 10154->1838 tok
+ok   rising-stars 2026-07-19 arm C 18478->1806 tok
+ok   easy-chores 2026-07-12 arm A 2334->1572 tok
+
+DONE 23/24 ok — approx $1.100
