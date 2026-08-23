@@ -7,10 +7,10 @@ import { SystemProbe } from "../domain/ports/system-probe.ts"
  * the outbound `SystemProbe` port, never on HTTP or Node.
  */
 export class CheckHealth extends Effect.Service<CheckHealth>()("application/health/CheckHealth", {
-  effect: Effect.gen(function*() {
+  effect: Effect.gen(function* () {
     const probe = yield* SystemProbe
 
-    const execute = Effect.gen(function*() {
+    const execute = Effect.gen(function* () {
       const [uptimeSeconds, dependencies] = yield* Effect.all([probe.uptimeSeconds, probe.dependencies], {
         concurrency: "unbounded"
       })
