@@ -48,9 +48,14 @@ import {
   PullRequestActivity,
   RepositoryActivity
 } from "../../../digests/domain/activity.ts"
+import type { RepoActivitySource } from "../../../digests/domain/ports/repo-activity-source.ts"
 import { DigestsHandlersLive } from "../../../digests/infrastructure/http/digests-handlers.ts"
 import { PgDigestRepositoryLive } from "../../../digests/infrastructure/persistence/pg-digest-repository.ts"
-import { collectDigestOver, repoActivitySourceOf } from "../../../digests/testing/fake-repo-activity.ts"
+import {
+  collectDigestOver,
+  emptyRepoActivitySource,
+  repoActivitySourceOf
+} from "../../../digests/testing/fake-repo-activity.ts"
 import { RequestLogger } from "../../../http/logging.ts"
 import { RunsApiGroup } from "../../../runs/api.ts"
 import { DescribeRun } from "../../../runs/application/describe-run.ts"
@@ -161,6 +166,17 @@ const FIRST_DRAFT =
 
 const SECOND_DRAFT = "A different take on the same day."
 
+/** What a model asked for a Quiet Draft comes back with: short, and not apologetic. */
+const QUIET_DRAFT =
+  "Light day. Fixed the day boundary so a Day Window means the day the User thinks it does, " +
+  "and left it there. Small change, and it is the sort of thing that is annoying to find twice."
+
+/** A day just under the threshold: one commit, eight lines. */
+const A_LIGHT_DAY = {
+  commits: [commit("ddd", "Fix the day boundary", [file("src/runs/day-window.ts", 6, 2)])],
+  pullRequests: []
+} as const
+
 let container: StartedPostgreSqlContainer
 
 beforeAll(async () => {
@@ -228,6 +244,27 @@ const fakeReachableRepositories = Layer.succeed(
 )
 
 /** The Forge, answering from a fixture: the same Activity for whatever is asked. */
+const forgeReportingDay = (day: {
+  readonly commits: ReadonlyArray<CommitActivity>
+  readonly pullRequests: ReadonlyArray<PullRequestActivity>
+}) =>
+  repoActivitySourceOf(
+    ({ dayWindow, repository }) =>
+      new RepositoryActivity({
+        repository,
+        dayWindow,
+        commits: day.commits,
+        pullRequests: day.pullRequests
+      })
+  )
+
+/**
+ * The default Forge: a busy day for every Day Window except one.
+ *
+ * A test that wants a light day asks for `QUIET_DAY` rather than rebuilding the
+ * server, which is what lets the Draft list contain a Quiet Draft and a full one
+ * side by side. A test about the Quiet Day path itself passes its own source in.
+ */
 const forgeReporting = repoActivitySourceOf(({ dayWindow, repository }) => {
   const day = dayWindow.day === QUIET_DAY ? A_QUIET_DAY : A_BUSY_DAY
   return new RepositoryActivity({
@@ -260,10 +297,10 @@ const DrivenLive = Layer.mergeAll(
 )
 
 /** The whole application, with a model that answers from a script. */
-const server = (answers: ReadonlyArray<ScriptedAnswer>) =>
+const server = (answers: ReadonlyArray<ScriptedAnswer>, forge: Layer.Layer<RepoActivitySource> = forgeReporting) =>
   Layer.suspend(() => {
     const stages = Layer.mergeAll(
-      collectDigestOver(forgeReporting),
+      collectDigestOver(forge),
       writeDraftOver(draftWriterAnswering(answers)).pipe(Layer.provide(TestConfig))
     )
 
@@ -354,6 +391,7 @@ interface DraftBody {
   readonly id: string
   readonly runId: string
   readonly digestId: string
+  readonly shape: string
   readonly body: string
   readonly editedBody: string | null
   readonly editedAt: string | null
@@ -424,6 +462,8 @@ describe("Reading the Draft a Run wrote", () => {
 
       assert.strictEqual(draft.runId, run.id)
       assert.strictEqual(draft.body, FIRST_DRAFT)
+      // A day over the threshold gets the full shape, and says which it got.
+      assert.strictEqual(draft.shape, "full")
 
       // Which model wrote it and what it cost travel with the Draft, because
       // both are questions asked of it later.
@@ -871,5 +911,70 @@ describe("Editing a Draft", () => {
       assert.isNull(mine.editedBody)
       assert.strictEqual(mine.body, FIRST_DRAFT)
     }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+})
+
+/**
+ * The Quiet Day, at the seam a User actually walks.
+ *
+ * The threshold is decided in `BuildDigest` and tested there at the boundary.
+ * What these hold is everything downstream of that decision: that a light day
+ * ends as a Quiet Day rather than a failure, that the Quiet Draft it produced is
+ * identifiable as one when it is read back, and that a day with nothing in it
+ * never reaches the model at all.
+ */
+describe("A quiet day", () => {
+  it.live("writes a Quiet Draft, and says that is what it is", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+
+      // Quiet is a successful outcome and not a failure: the Run did its job.
+      const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
+      assert.strictEqual(finished.state, "quiet")
+      assert.isNull(finished.failureReason)
+
+      const draft = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/draft`), (r) => r.json)) as DraftBody
+      assert.strictEqual(draft.body, QUIET_DRAFT)
+      // Read back, a Quiet Draft is one without anybody having to guess from
+      // its length.
+      assert.strictEqual(draft.shape, "quiet")
+
+      // And the Digest beside it says why it was one.
+      const digest = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/digest`), (r) => r.json)) as {
+        readonly isQuiet: boolean
+        readonly commitCount: number
+      }
+      assert.isTrue(digest.isQuiet)
+      assert.strictEqual(digest.commitCount, 1)
+    }).pipe(Effect.provide(server([{ body: QUIET_DRAFT }], forgeReportingDay(A_LIGHT_DAY))))
+  )
+
+  it.live("ends a day with no Activity at all cleanly, and invents nothing", () =>
+    Effect.gen(function* () {
+      const { run, session } = yield* runFor("2026-08-22")
+      yield* workUntilEmpty
+
+      // A clear answer rather than an error, and rather than a post about a day
+      // that did not happen.
+      const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
+      assert.strictEqual(finished.state, "quiet")
+      assert.isNull(finished.failureReason)
+
+      // The model had prose ready and was never asked for it: there is nothing
+      // to write from, so nothing was written.
+      assert.strictEqual((yield* draftsFor(run.id))[0]?.count, "0")
+      assert.strictEqual((yield* get(session, `/v1/runs/${run.id}/draft`)).status, 404)
+
+      // The Digest still exists and says, factually, that the day was empty.
+      const digest = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/digest`), (r) => r.json)) as {
+        readonly isQuiet: boolean
+        readonly commitCount: number
+        readonly commits: ReadonlyArray<unknown>
+      }
+      assert.isTrue(digest.isQuiet)
+      assert.strictEqual(digest.commitCount, 0)
+      assert.deepStrictEqual([...digest.commits], [])
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }], emptyRepoActivitySource)))
   )
 })

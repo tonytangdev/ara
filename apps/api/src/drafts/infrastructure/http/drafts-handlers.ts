@@ -20,6 +20,7 @@ const toResponse = (draft: StoredDraft) =>
     id: draft.id,
     runId: draft.runId,
     digestId: draft.digestId,
+    shape: draft.shape,
     body: draft.body,
     editedBody: draft.editedBody,
     editedAt: draft.editedAt,
@@ -40,7 +41,7 @@ const toSummary = (summary: DraftSummary) =>
     name: summary.repository.name,
     day: summary.dayWindow.day,
     timeZone: summary.dayWindow.timeZone,
-    isQuiet: summary.isQuiet,
+    isQuiet: summary.shape === "quiet",
     isEdited: summary.isEdited,
     model: summary.model,
     generatedAt: summary.generatedAt

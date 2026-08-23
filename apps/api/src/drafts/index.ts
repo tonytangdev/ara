@@ -52,5 +52,5 @@ export {
   NoSuchDraft
 } from "./api.ts"
 export { WriteDraft } from "./application/write-draft.ts"
-export { DraftSummary, StoredDraft, WrittenDraft } from "./domain/draft.ts"
+export { DraftShape, DraftSummary, QUIET_DRAFT_WORDS, StoredDraft, WrittenDraft } from "./domain/draft.ts"
 export { DraftWriter } from "./domain/ports/draft-writer.ts"

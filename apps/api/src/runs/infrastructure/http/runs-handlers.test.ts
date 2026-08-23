@@ -40,7 +40,7 @@ import { PgRepoConnectionRepositoryLive } from "../../../connections/infrastruct
 import { PgSessionStoreLive } from "../../../connections/infrastructure/persistence/pg-session-store.ts"
 import { PgUserRepositoryLive } from "../../../connections/infrastructure/persistence/pg-user-repository.ts"
 import { MigrationsLive } from "../../../database/index.ts"
-import { collectDigestOver, emptyRepoActivitySource } from "../../../digests/testing/fake-repo-activity.ts"
+import { busyRepoActivitySource, collectDigestOver } from "../../../digests/testing/fake-repo-activity.ts"
 import { passableDraftStage } from "../../../drafts/testing/fake-draft-writer.ts"
 import { RequestLogger } from "../../../http/logging.ts"
 import { RunsApiGroup } from "../../api.ts"
@@ -187,7 +187,7 @@ const UnderTest = Layer.mergeAll(ConnectionsHandlersLive, RepoConnectionsHandler
   Layer.provideMerge(SessionAuthenticationLive),
   Layer.provideMerge(
     ProcessNextRun.Default.pipe(
-      Layer.provide(Layer.mergeAll(collectDigestOver(emptyRepoActivitySource), passableDraftStage))
+      Layer.provide(Layer.mergeAll(collectDigestOver(busyRepoActivitySource), passableDraftStage))
     )
   ),
   Layer.provide(
@@ -215,7 +215,7 @@ const server = Layer.suspend(() =>
     Layer.provide(HttpApiBuilder.api(RunsAndConnectionsApi).pipe(Layer.provide(UnderTest))),
     Layer.provideMerge(
       ProcessNextRun.Default.pipe(
-        Layer.provide(Layer.mergeAll(collectDigestOver(emptyRepoActivitySource), passableDraftStage)),
+        Layer.provide(Layer.mergeAll(collectDigestOver(busyRepoActivitySource), passableDraftStage)),
         Layer.provide(PgJobQueueLive)
       )
     ),

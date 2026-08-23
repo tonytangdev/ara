@@ -17,6 +17,32 @@ export type DraftId = typeof DraftId.Type
 export const FULL_DRAFT_WORDS = { min: 150, max: 250 } as const
 
 /**
+ * How long a Quiet Draft should run to.
+ *
+ * Short on purpose, and the shortness is the correctness measure. The prototype
+ * held the full range over a thin Digest and watched the model fill the gap with
+ * things that never happened — files nobody touched, a motivation nobody had, an
+ * arc from a morning of two commits. Forty to ninety words is about as much as a
+ * light day can honestly carry, so it is what a light day is asked for.
+ */
+export const QUIET_DRAFT_WORDS = { min: 40, max: 90 } as const
+
+/**
+ * Which of the two shapes a Draft took (CONTEXT: Draft, Quiet Draft).
+ *
+ * Not a style flag. The shape follows deterministically from the Digest's own
+ * `isQuiet`, which was decided before any model was called, and it is carried on
+ * the Draft so that a Quiet Draft is identifiable as one when it is read back
+ * rather than something a reader has to infer from its length.
+ */
+export const DraftShape = Schema.Literal("full", "quiet")
+export type DraftShape = typeof DraftShape.Type
+
+/** How long a Draft of this shape was asked to run to. */
+export const wordsFor = (shape: DraftShape): { readonly min: number; readonly max: number } =>
+  shape === "quiet" ? QUIET_DRAFT_WORDS : FULL_DRAFT_WORDS
+
+/**
  * Prose the model did not actually write.
  *
  * The model sometimes answers with reasoning and no message content. That is
@@ -75,6 +101,8 @@ export class StoredDraft extends Schema.Class<StoredDraft>("StoredDraft")({
   id: Schema.UUID,
   runId: Schema.UUID,
   digestId: Schema.UUID,
+  /** Full or Quiet, read from the Digest it was written from rather than guessed at from the prose. */
+  shape: DraftShape,
   /** What the model wrote. Never overwritten, whatever a User does to it afterwards. */
   body: Schema.String,
   /**
@@ -158,12 +186,11 @@ export class DraftSummary extends Schema.Class<DraftSummary>("DraftSummary")({
   repository: Repository,
   dayWindow: DayWindow,
   /**
-   * Whether this is a Quiet Draft: a few honest sentences about a light day
-   * rather than a full-length post. Today it is read from the Digest's own
-   * Quiet Day judgement, which is the only place that judgement is recorded;
-   * #8 gives a Draft its own shape and this becomes a fact about the Draft.
+   * Which of the two shapes it took: the same fact a single Draft carries, so
+   * a Quiet Draft is recognisable in the list without opening it. Read from the
+   * Digest's own Quiet Day judgement, which is where that judgement is made.
    */
-  isQuiet: Schema.Boolean,
+  shape: DraftShape,
   /**
    * Whether a human has been through it. The list carries no bodies, so this is
    * the only place an edited Draft can be told apart from an untouched one

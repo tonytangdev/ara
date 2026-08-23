@@ -9,6 +9,8 @@ interface DraftRow {
   readonly id: string
   readonly run_id: string
   readonly digest_id: string
+  /** Read from the Digest this Draft was written from, never stored beside it. */
+  readonly is_quiet: boolean
   readonly body: string
   readonly edited_body: string | null
   readonly edited_at: Date | null
@@ -31,6 +33,7 @@ const toStoredDraft = (row: DraftRow) =>
     id: row.id,
     runId: row.run_id,
     digestId: row.digest_id,
+    shape: row.is_quiet ? "quiet" : "full",
     body: row.body,
     editedBody: row.edited_body,
     editedAt: row.edited_at === null ? null : row.edited_at.toISOString(),
@@ -72,11 +75,27 @@ const toDraftSummary = (row: DraftSummaryRow) =>
     digestId: row.digest_id,
     repository: { forge: row.forge, owner: row.owner, name: row.name },
     dayWindow: { day: row.day, timeZone: row.time_zone },
-    isQuiet: row.is_quiet,
+    shape: row.is_quiet ? "quiet" : "full",
     isEdited: row.is_edited,
     model: row.model,
     generatedAt: row.generated_at.toISOString()
   })
+
+/**
+ * Whether this is a Quiet Draft, taken from the Digest it was written from.
+ *
+ * Derived rather than stored, because it is not an independent fact: the shape
+ * of a Draft follows from `isQuiet`, which was decided when the Digest was built
+ * and cannot change afterwards. A column here would be a second copy of that
+ * decision, free to drift from the first and to disagree with the Digest a User
+ * can read beside it.
+ */
+const SHAPE = "coalesce((digests.content->>'isQuiet')::boolean, false) as is_quiet"
+
+const qualified = (table: string) =>
+  COLUMNS.split(", ")
+    .map((column) => `${table}.${column}`)
+    .join(", ")
 
 /**
  * Driven (outbound) adapter for Drafts.
@@ -94,13 +113,19 @@ export const PgDraftRepositoryLive = Layer.effect(
     const sql = yield* SqlClient.SqlClient
 
     const save = (runId: RunId, userId: UserId, digestId: string, written: WrittenDraft) =>
+      // One statement: the insert feeds a select that joins the Digest back, so
+      // a saved Draft comes back knowing its own shape without a second read.
       sql<DraftRow>`
-        insert into drafts (run_id, user_id, digest_id, body, model, input_tokens, output_tokens, total_tokens)
-        values (
-          ${runId}, ${userId}, ${digestId}, ${written.body}, ${written.model},
-          ${written.inputTokens}, ${written.outputTokens}, ${written.totalTokens}
+        with written as (
+          insert into drafts (run_id, user_id, digest_id, body, model, input_tokens, output_tokens, total_tokens)
+          values (
+            ${runId}, ${userId}, ${digestId}, ${written.body}, ${written.model},
+            ${written.inputTokens}, ${written.outputTokens}, ${written.totalTokens}
+          )
+          returning ${sql.unsafe(COLUMNS)}
         )
-        returning ${sql.unsafe(COLUMNS)}
+        select ${sql.unsafe(qualified("written"))}, ${sql.unsafe(SHAPE)}
+        from written join digests on digests.id = written.digest_id
       `.pipe(
         Effect.flatMap((rows) =>
           rows[0] === undefined ? Effect.dieMessage("insert of a Draft returned no row") : toStoredDraft(rows[0])
@@ -110,9 +135,10 @@ export const PgDraftRepositoryLive = Layer.effect(
 
     const latestForRun = (runId: RunId, userId: UserId) =>
       sql<DraftRow>`
-        select ${sql.unsafe(COLUMNS)} from drafts
-        where run_id = ${runId} and user_id = ${userId}
-        order by generated_at desc, id desc
+        select ${sql.unsafe(qualified("drafts"))}, ${sql.unsafe(SHAPE)}
+        from drafts join digests on digests.id = drafts.digest_id
+        where drafts.run_id = ${runId} and drafts.user_id = ${userId}
+        order by drafts.generated_at desc, drafts.id desc
         limit 1
       `.pipe(
         Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toStoredDraft(rows[0])))),
@@ -121,8 +147,9 @@ export const PgDraftRepositoryLive = Layer.effect(
 
     const findOwnedBy = (id: DraftId, userId: UserId) =>
       sql<DraftRow>`
-        select ${sql.unsafe(COLUMNS)} from drafts
-        where id = ${id} and user_id = ${userId}
+        select ${sql.unsafe(qualified("drafts"))}, ${sql.unsafe(SHAPE)}
+        from drafts join digests on digests.id = drafts.digest_id
+        where drafts.id = ${id} and drafts.user_id = ${userId}
       `.pipe(
         Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toStoredDraft(rows[0])))),
         Effect.orDie
@@ -135,11 +162,17 @@ export const PgDraftRepositoryLive = Layer.effect(
      * nothing is returned and nothing is written.
      */
     const saveEdit = (id: DraftId, userId: UserId, body: string) =>
+      // One statement, like `save`: the update feeds a select that joins the
+      // Digest back, so an edited Draft comes back knowing its own shape.
       sql<DraftRow>`
-        update drafts
-        set edited_body = ${body}, edited_at = now()
-        where id = ${id} and user_id = ${userId}
-        returning ${sql.unsafe(COLUMNS)}
+        with edited as (
+          update drafts
+          set edited_body = ${body}, edited_at = now()
+          where id = ${id} and user_id = ${userId}
+          returning ${sql.unsafe(COLUMNS)}
+        )
+        select ${sql.unsafe(qualified("edited"))}, ${sql.unsafe(SHAPE)}
+        from edited join digests on digests.id = edited.digest_id
       `.pipe(
         Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toStoredDraft(rows[0])))),
         Effect.orDie
@@ -165,7 +198,7 @@ export const PgDraftRepositoryLive = Layer.effect(
         select
           drafts.id, drafts.run_id, drafts.digest_id, drafts.model, drafts.generated_at,
           runs.forge, runs.owner, runs.name, to_char(runs.day, 'YYYY-MM-DD') as day, runs.time_zone,
-          coalesce((digests.content ->> 'isQuiet')::boolean, false) as is_quiet,
+          ${sql.unsafe(SHAPE)},
           drafts.edited_at is not null as is_edited
         from drafts
         join runs on runs.id = drafts.run_id

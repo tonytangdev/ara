@@ -466,8 +466,10 @@ describe("A Day Window with no Activity at all", () => {
       const { run, session } = yield* runFor("2026-08-22")
       yield* workUntilEmpty
 
+      // A Quiet Day, which is a successful outcome: the Run answered the
+      // question it was asked, and the answer was "nothing happened".
       const finished = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}`), (r) => r.json)) as RunBody
-      assert.strictEqual(finished.state, "succeeded")
+      assert.strictEqual(finished.state, "quiet")
       assert.isNull(finished.failureReason)
 
       const digest = (yield* Effect.flatMap(get(session, `/v1/runs/${run.id}/digest`), (r) => r.json)) as DigestBody

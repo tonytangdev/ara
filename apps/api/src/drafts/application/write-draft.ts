@@ -31,6 +31,11 @@ export interface WriteDraftRequest {
  * - A Run that already has a Draft is left alone. A deploy that interrupts a
  *   Run hands it back to the queue, and processing it again must not buy a
  *   second model call or leave a second Draft.
+ * - A Digest with no Activity in it is never written from. There is nothing to
+ *   say about a day that contained nothing, and asking a model anyway is asking
+ *   it to invent the day. The Run pipeline ends such a Run as a Quiet Day
+ *   before it gets here; this is the guard that holds if a later caller does
+ *   not.
  * - Blank prose is never persisted. The model sometimes answers with reasoning
  *   and no message content, which is not an HTTP error and which a naive
  *   pipeline would happily store as an empty Draft. It is a retryable failure,
@@ -96,6 +101,18 @@ export class WriteDraft extends Effect.Service<WriteDraft>()("application/drafts
           })
         )
 
+        // A day with no Activity at all. Not a failure and not a Draft: there
+        // is nothing to write from, and a model handed an empty record writes
+        // about a day that did not happen.
+        if (stored.digest.isEmpty) {
+          return yield* Effect.fail(
+            new DraftUnavailable({
+              reason: "There was no Activity on this day, so there is nothing to write about.",
+              retryable: false
+            })
+          )
+        }
+
         const written = yield* write(stored.digest)
         const draft = yield* drafts.save(request.runId, request.userId, stored.id, written)
 
@@ -105,6 +122,7 @@ export class WriteDraft extends Effect.Service<WriteDraft>()("application/drafts
             draftId: draft.id,
             digestId: stored.id,
             model: draft.model,
+            shape: draft.shape,
             words: wordCount(draft.body),
             totalTokens: draft.totalTokens
           })

@@ -38,8 +38,13 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
      * after a deploy starts the second stage from storage, and regenerating a
      * Draft later (#11) takes the same path without a Forge call.
      *
-     * The Quiet Day path — a light day getting a short, honest Draft instead of
-     * a full one — is #8.
+     * The Quiet Day is decided before either stage runs: `isQuiet` is a fact
+     * about the Digest by the time the collect stage finishes, so the pipeline
+     * only reads it. A light day still gets a Draft — a Quiet Draft, shorter and
+     * told it may say the day was light — and ends in `quiet`, which is a
+     * successful outcome and not a failure. A day with no Activity at all ends
+     * there too, and never reaches the model: there is nothing to write from,
+     * and asking anyway is asking for a day that did not happen.
      */
     const collect = (run: Run) =>
       collectDigest.execute({
@@ -54,18 +59,27 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
 
     const process = (run: Run) =>
       Effect.gen(function* () {
-        yield* collect(run)
+        const { digest } = yield* collect(run)
+
+        const where = {
+          runId: run.id,
+          userId: run.userId,
+          repository: `${run.repository.owner}/${run.repository.name}`,
+          day: run.dayWindow.day
+        }
+
+        if (digest.isEmpty) {
+          yield* queue.complete(run.id, { state: "quiet" })
+          yield* Effect.logInfo("Run found a day with nothing in it").pipe(Effect.annotateLogs(where))
+          return
+        }
+
         yield* queue.advance(run.id, "drafting")
         yield* draft(run)
-        yield* queue.complete(run.id, { state: "succeeded" })
+        yield* queue.complete(run.id, { state: digest.isQuiet ? "quiet" : "succeeded" })
 
-        yield* Effect.logInfo("Run succeeded").pipe(
-          Effect.annotateLogs({
-            runId: run.id,
-            userId: run.userId,
-            repository: `${run.repository.owner}/${run.repository.name}`,
-            day: run.dayWindow.day
-          })
+        yield* Effect.logInfo(digest.isQuiet ? "Run wrote a Quiet Draft" : "Run succeeded").pipe(
+          Effect.annotateLogs(where)
         )
       }).pipe(
         // The failures that already know how to explain themselves: the

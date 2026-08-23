@@ -535,3 +535,94 @@ describe("Deciding a Quiet Day", () => {
     })
   )
 })
+
+/**
+ * The threshold, one line either side of where it fires.
+ *
+ * Both numbers are exclusive — *fewer than* three commits and *under* fifty
+ * changed lines — and "under fifty" is exactly the kind of boundary that drifts
+ * into "fifty or fewer" during a refactor. These are the tests that would notice.
+ * They are here, on the pure function, and not in a prompt: the Quiet Day is
+ * decided before any model is called and is a fact about the Digest by the time
+ * a Draft is asked for.
+ */
+describe("The Quiet Day threshold, at the boundary", () => {
+  /** Two commits, and exactly `lines` changed lines between them. */
+  const twoCommitsOf = (lines: number) =>
+    activityOf([commit({ files: [["src/main.ts", lines - 1, 0]] }), commit({ files: [["src/other.ts", 1, 0]] })])
+
+  it.effect("is quiet one line under the line threshold", () =>
+    Effect.gen(function* () {
+      const digest = yield* digestOf(twoCommitsOf(49))
+
+      assert.strictEqual(digest.commitCount, 2)
+      assert.strictEqual(digest.totals.additions + digest.totals.deletions, 49)
+      assert.isTrue(digest.isQuiet)
+    }).pipe(Effect.provide(Building))
+  )
+
+  it.effect("is not quiet exactly at the line threshold", () =>
+    Effect.gen(function* () {
+      const digest = yield* digestOf(twoCommitsOf(50))
+
+      assert.strictEqual(digest.totals.additions + digest.totals.deletions, 50)
+      assert.isFalse(digest.isQuiet)
+    }).pipe(Effect.provide(Building))
+  )
+
+  it.effect("is quiet one commit under the commit threshold", () =>
+    Effect.gen(function* () {
+      const digest = yield* digestOf(
+        activityOf([commit({ files: [["a.ts", 1, 0]] }), commit({ files: [["b.ts", 1, 0]] })])
+      )
+
+      assert.strictEqual(digest.commitCount, 2)
+      assert.isTrue(digest.isQuiet)
+    }).pipe(Effect.provide(Building))
+  )
+
+  it.effect("is not quiet exactly at the commit threshold, however little moved", () =>
+    Effect.gen(function* () {
+      const digest = yield* digestOf(
+        activityOf([
+          commit({ files: [["a.ts", 1, 0]] }),
+          commit({ files: [["b.ts", 1, 0]] }),
+          commit({ files: [["c.ts", 1, 0]] })
+        ])
+      )
+
+      assert.strictEqual(digest.commitCount, 3)
+      assert.strictEqual(digest.totals.additions + digest.totals.deletions, 3)
+      assert.isFalse(digest.isQuiet)
+    }).pipe(Effect.provide(Building))
+  )
+
+  it.effect("counts deletions as changed lines too: a day spent removing code was still a day", () =>
+    Effect.gen(function* () {
+      const digest = yield* digestOf(
+        activityOf([commit({ files: [["src/dead.ts", 0, 60]] }), commit({ files: [["src/main.ts", 0, 1]] })])
+      )
+
+      assert.strictEqual(digest.totals.deletions, 61)
+      assert.isFalse(digest.isQuiet)
+    }).pipe(Effect.provide(Building))
+  )
+
+  it.effect("moves both halves of the threshold when they are corrected", () =>
+    Effect.gen(function* () {
+      const activity = twoCommitsOf(49)
+
+      const strict = yield* digestOf(activity).pipe(
+        Effect.provide(buildingWith({ DIGEST_QUIET_BELOW_COMMITS: "2", DIGEST_QUIET_BELOW_CHANGED_LINES: "50" }))
+      )
+      const stricter = yield* digestOf(activity).pipe(
+        Effect.provide(buildingWith({ DIGEST_QUIET_BELOW_COMMITS: "3", DIGEST_QUIET_BELOW_CHANGED_LINES: "49" }))
+      )
+
+      // Two commits is not *fewer than* two; forty-nine lines is not *under*
+      // forty-nine. Either half moving is enough to stop a day being quiet.
+      assert.isFalse(strict.isQuiet)
+      assert.isFalse(stricter.isQuiet)
+    })
+  )
+})

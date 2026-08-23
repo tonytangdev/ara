@@ -4,7 +4,7 @@ import { SessionAuthentication } from "../connections/api.ts"
 import { Forge } from "../connections/domain/forge.ts"
 import { TimeZone } from "../connections/domain/time-zone.ts"
 import { CalendarDay } from "../runs/domain/day-window.ts"
-import { DRAFT_PAGE_SIZE, DraftCursorFromString, EditedBody } from "./domain/draft.ts"
+import { DRAFT_PAGE_SIZE, DraftCursorFromString, DraftShape, EditedBody } from "./domain/draft.ts"
 
 /**
  * The Draft a Run wrote, with what it cost attached.
@@ -18,6 +18,11 @@ import { DRAFT_PAGE_SIZE, DraftCursorFromString, EditedBody } from "./domain/dra
  * Digest it was written from is a request away, and it is the only thing the
  * model was given.
  *
+ * `shape` is what makes a Quiet Draft identifiable as one. A short post is not
+ * self-evidently a Quiet Draft — it could just be a short post — so the reader
+ * is told which of the two shapes was asked for, and the Digest's own `isQuiet`
+ * says why.
+ *
  * `body` is always what the model wrote and `editedBody` is what the User made
  * of it, null until they touch it. They are two fields rather than one because
  * an edit must never destroy the generated text (user story 18); a client that
@@ -27,6 +32,7 @@ export class DraftResponse extends Schema.Class<DraftResponse>("DraftResponse")(
   id: Schema.String,
   runId: Schema.String,
   digestId: Schema.String,
+  shape: DraftShape,
   body: Schema.String,
   editedBody: Schema.NullOr(Schema.String),
   editedAt: Schema.NullOr(Schema.DateTimeUtc),
