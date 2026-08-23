@@ -12,7 +12,15 @@ pnpm monorepo.
 
 ```sh
 pnpm install
+cp .env.example .env      # Postgres credentials, read by both Compose and the API
+docker compose up -d      # Postgres on ${DATABASE_PORT:-5432}
+pnpm --filter @ara/api dev
 ```
+
+The API applies any outstanding schema migrations on boot and refuses to start
+if it cannot, so `docker compose up` and `pnpm dev` are the whole setup.
+`GET /health` reports the database as a dependency: stop the container and it
+goes `503`, start it again and it recovers.
 
 Scripts at the root fan out to every workspace package: `pnpm build`, `pnpm dev`,
 `pnpm test`, `pnpm lint`, `pnpm typecheck`.

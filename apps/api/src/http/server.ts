@@ -7,7 +7,12 @@ import { HealthLive } from "../health/index.ts"
 import { AraApi } from "./api.ts"
 import { DocsLive } from "./docs.ts"
 
-/** The API implementation: every module, wired. Add new modules here. */
+/**
+ * The API implementation: every module, wired. Add new modules here.
+ *
+ * `SqlClient` is left as a requirement rather than provided: the composition
+ * root supplies it, and tests supply a disposable one.
+ */
 export const ApiLive = HttpApiBuilder.api(AraApi).pipe(Layer.provide(HealthLive))
 
 const NodeServerLive = Layer.unwrapEffect(

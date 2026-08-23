@@ -18,7 +18,11 @@ src/
       check-health.ts              the use case = driving (inbound) port
     infrastructure/              adapters — the only code that knows the outside world
       http/health-handlers.ts      driving adapter
-      system/process-system-probe.ts   driven adapter (Node `process`)
+      system/runtime-system-probe.ts   driven adapter (Node `process` + Postgres)
+  database/                    shared infrastructure, not a module
+    client.ts                    the one connection pool, published as `SqlClient`
+    migrator.ts                  applies outstanding migrations as a Layer
+    migrations/                  one file per migration, imported in `index.ts`
   http/
     api.ts                     composes each module's group into one HttpApi
     docs.ts                    serves that HttpApi as Scalar reference docs
@@ -33,6 +37,23 @@ with a stub `SystemProbe`.
 
 Nothing outside a module should import deeper than its `api.ts` or `index.ts`.
 Adding a feature means adding one folder plus two lines in `http/`.
+
+## Database
+
+Postgres, via `@effect/sql-pg`, raw SQL, no ORM. `DatabaseLive` is provided once
+in `main.ts`, so the whole application shares one pool and no call site builds
+its own. Because migrations are a `Layer`, they run while the application is
+being built — before the server binds — and a migration that cannot be applied
+fails the launch loudly rather than showing up as a query error later.
+
+Adding a migration: drop `NNNN_name.ts` in `database/migrations/` with a default
+export of an `Effect` that needs `SqlClient`, then add it to the record in
+`database/migrations/index.ts`. Applied migrations are recorded in
+`schema_migrations`, which is also what the health probe reads — a database that
+is up but has never been migrated reports as unreachable rather than healthy.
+
+Tests get their own Postgres from Testcontainers (`database/database.test.ts`),
+so a green `pnpm test` needs a Docker daemon but never `docker compose up`.
 
 ## Routes
 
@@ -55,4 +76,20 @@ pnpm test       # vitest
 pnpm typecheck
 ```
 
-`PORT` (default `3000`) and `HOST` (default `0.0.0.0`) configure the server.
+## Configuration
+
+| Variable            | Default     | Purpose                          |
+| ------------------- | ----------- | -------------------------------- |
+| `PORT`              | `3000`      | Port the server binds to         |
+| `HOST`              | `0.0.0.0`   | Interface the server binds to    |
+| `DATABASE_HOST`     | `localhost` | Postgres host                    |
+| `DATABASE_PORT`     | `5432`      | Postgres port                    |
+| `DATABASE_NAME`     | _required_  | Database name                    |
+| `DATABASE_USER`     | _required_  | Database user                    |
+| `DATABASE_PASSWORD` | _required_  | Database password                |
+| `DATABASE_SSL`      | `false`     | Connect over TLS                 |
+
+The credentials have no defaults on purpose: an unconfigured deployment should
+fail to boot rather than quietly try a well-known password. `pnpm dev` and
+`pnpm start` load the repo-root `.env` if it exists, which is the same file
+Compose reads.

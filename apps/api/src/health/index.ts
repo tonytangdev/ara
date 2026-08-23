@@ -1,7 +1,7 @@
 import { Layer } from "effect"
 import { CheckHealth } from "./application/check-health.ts"
 import { HealthHandlersLive } from "./infrastructure/http/health-handlers.ts"
-import { ProcessSystemProbeLive } from "./infrastructure/system/process-system-probe.ts"
+import { RuntimeSystemProbeLive } from "./infrastructure/system/runtime-system-probe.ts"
 
 /**
  * The health module's public face. Nothing outside this folder should import
@@ -10,11 +10,13 @@ import { ProcessSystemProbeLive } from "./infrastructure/system/process-system-p
  * - `./api.ts` — the HTTP contract this module contributes to the API surface.
  * - `HealthLive` — the module, fully wired: handlers, use case, driven adapters.
  *
- * Swap `ProcessSystemProbeLive` here and the rest of the app is untouched.
+ * Swap `RuntimeSystemProbeLive` here and the rest of the app is untouched. The
+ * `SqlClient` it needs is left as a requirement, so the composition root
+ * decides which Postgres the module probes.
  */
 export const HealthLive = HealthHandlersLive.pipe(
   Layer.provide(CheckHealth.Default),
-  Layer.provide(ProcessSystemProbeLive)
+  Layer.provide(RuntimeSystemProbeLive)
 )
 
 export { HealthApiGroup, HealthResponse, Unhealthy } from "./api.ts"
