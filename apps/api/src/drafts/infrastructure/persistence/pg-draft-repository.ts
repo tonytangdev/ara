@@ -10,6 +10,8 @@ interface DraftRow {
   readonly run_id: string
   readonly digest_id: string
   readonly body: string
+  readonly edited_body: string | null
+  readonly edited_at: Date | null
   readonly model: string
   readonly input_tokens: number | null
   readonly output_tokens: number | null
@@ -30,6 +32,8 @@ const toStoredDraft = (row: DraftRow) =>
     runId: row.run_id,
     digestId: row.digest_id,
     body: row.body,
+    editedBody: row.edited_body,
+    editedAt: row.edited_at === null ? null : row.edited_at.toISOString(),
     model: row.model,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
@@ -37,7 +41,8 @@ const toStoredDraft = (row: DraftRow) =>
     generatedAt: row.generated_at.toISOString()
   })
 
-const COLUMNS = "id, run_id, digest_id, body, model, input_tokens, output_tokens, total_tokens, generated_at"
+const COLUMNS =
+  "id, run_id, digest_id, body, edited_body, edited_at, model, input_tokens, output_tokens, total_tokens, generated_at"
 
 /**
  * One row of the Draft list: the Draft, plus the two things that say which day
@@ -53,6 +58,7 @@ interface DraftSummaryRow {
   readonly day: string
   readonly time_zone: string
   readonly is_quiet: boolean
+  readonly is_edited: boolean
   readonly model: string
   readonly generated_at: Date
 }
@@ -67,6 +73,7 @@ const toDraftSummary = (row: DraftSummaryRow) =>
     repository: { forge: row.forge, owner: row.owner, name: row.name },
     dayWindow: { day: row.day, timeZone: row.time_zone },
     isQuiet: row.is_quiet,
+    isEdited: row.is_edited,
     model: row.model,
     generatedAt: row.generated_at.toISOString()
   })
@@ -122,6 +129,23 @@ export const PgDraftRepositoryLive = Layer.effect(
       )
 
     /**
+     * The edit lands in its own column, so the generated prose is still there
+     * afterwards. `where user_id` is what makes editing somebody else's Draft
+     * indistinguishable from editing one that never existed: no row matches, so
+     * nothing is returned and nothing is written.
+     */
+    const saveEdit = (id: DraftId, userId: UserId, body: string) =>
+      sql<DraftRow>`
+        update drafts
+        set edited_body = ${body}, edited_at = now()
+        where id = ${id} and user_id = ${userId}
+        returning ${sql.unsafe(COLUMNS)}
+      `.pipe(
+        Effect.flatMap((rows) => (rows[0] === undefined ? Effect.succeedNone : Effect.asSome(toStoredDraft(rows[0])))),
+        Effect.orDie
+      )
+
+    /**
      * The list, newest first, keyed off `(generated_at, id)` so a cursor names
      * a position rather than a count. The joins are what turn a Draft into
      * something choosable: the Run says which repository and which Day Window,
@@ -141,7 +165,8 @@ export const PgDraftRepositoryLive = Layer.effect(
         select
           drafts.id, drafts.run_id, drafts.digest_id, drafts.model, drafts.generated_at,
           runs.forge, runs.owner, runs.name, to_char(runs.day, 'YYYY-MM-DD') as day, runs.time_zone,
-          coalesce((digests.content ->> 'isQuiet')::boolean, false) as is_quiet
+          coalesce((digests.content ->> 'isQuiet')::boolean, false) as is_quiet,
+          drafts.edited_at is not null as is_edited
         from drafts
         join runs on runs.id = drafts.run_id
         join digests on digests.id = drafts.digest_id
@@ -154,6 +179,6 @@ export const PgDraftRepositoryLive = Layer.effect(
       )
     }
 
-    return DraftRepository.of({ save, latestForRun, findOwnedBy, listFor })
+    return DraftRepository.of({ save, latestForRun, findOwnedBy, saveEdit, listFor })
   })
 )

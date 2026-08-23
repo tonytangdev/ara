@@ -24,6 +24,16 @@ export class DraftRepository extends Context.Tag("domain/drafts/DraftRepository"
     readonly latestForRun: (runId: RunId, userId: UserId) => Effect.Effect<Option.Option<StoredDraft>>
     readonly findOwnedBy: (id: DraftId, userId: UserId) => Effect.Effect<Option.Option<StoredDraft>>
     /**
+     * Save the User's edit beside the generated prose, and hand back the Draft
+     * as it now stands. `None` when the Draft is not theirs or does not exist —
+     * the same answer for both, so the caller has nothing to tell apart.
+     *
+     * It writes `edited_body` and never `body`: the generated text is what
+     * regeneration compares against and what a later "what do they always
+     * change?" reads from, and an upsert over one column would lose both.
+     */
+    readonly saveEdit: (id: DraftId, userId: UserId, body: string) => Effect.Effect<Option.Option<StoredDraft>>
+    /**
      * One page of the User's Drafts, newest first. `limit` is the caller's, and
      * bounded above it: this port will happily return whatever it is asked for,
      * so the ceiling belongs to the use case rather than here.

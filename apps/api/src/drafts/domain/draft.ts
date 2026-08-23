@@ -51,6 +51,19 @@ export class WrittenDraft extends Schema.Class<WrittenDraft>("WrittenDraft")({
 }) {}
 
 /**
+ * Prose a human is offering as their own.
+ *
+ * The one rule an edit has to keep is the one the generated body already keeps:
+ * a Draft that says nothing is not a Draft. An edit down to whitespace is a
+ * bad request rather than a Draft with no postable text in it, and rejecting it
+ * at the edge means no use case or adapter has to hold that thought.
+ */
+export const EditedBody = Schema.String.pipe(Schema.filter((body) => !isBlank(body))).annotations({
+  identifier: "EditedBody",
+  description: "The text the User wants the Draft to be. Cannot be blank."
+})
+
+/**
  * A Draft as it was persisted: the prose, and the Digest it was written from.
  *
  * It hangs off both the Run that produced it and the Digest it came from. The
@@ -62,7 +75,18 @@ export class StoredDraft extends Schema.Class<StoredDraft>("StoredDraft")({
   id: Schema.UUID,
   runId: Schema.UUID,
   digestId: Schema.UUID,
+  /** What the model wrote. Never overwritten, whatever a User does to it afterwards. */
   body: Schema.String,
+  /**
+   * What the User made of it, or null while they have not touched it.
+   *
+   * Beside the generated body rather than on top of it, so that regeneration
+   * can see human work before it writes anything (#11) and so that "what does
+   * this User always change?" stays an answerable question (user story 18).
+   */
+  editedBody: Schema.NullOr(Schema.String),
+  /** When the edit was made, and null with it: the pair is the "has been edited" fact. */
+  editedAt: Schema.NullOr(Schema.DateTimeUtc),
   model: Schema.String,
   inputTokens: Schema.NullOr(Schema.Int),
   outputTokens: Schema.NullOr(Schema.Int),
@@ -140,6 +164,12 @@ export class DraftSummary extends Schema.Class<DraftSummary>("DraftSummary")({
    * #8 gives a Draft its own shape and this becomes a fact about the Draft.
    */
   isQuiet: Schema.Boolean,
+  /**
+   * Whether a human has been through it. The list carries no bodies, so this is
+   * the only place an edited Draft can be told apart from an untouched one
+   * without opening it.
+   */
+  isEdited: Schema.Boolean,
   model: Schema.String,
   generatedAt: Schema.DateTimeUtc
 }) {}

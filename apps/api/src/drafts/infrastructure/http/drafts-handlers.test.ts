@@ -62,6 +62,7 @@ import { PgJobQueueLive } from "../../../runs/infrastructure/persistence/pg-job-
 import { PgRunRepositoryLive } from "../../../runs/infrastructure/persistence/pg-run-repository.ts"
 import { DraftsApiGroup } from "../../api.ts"
 import { DescribeDraft } from "../../application/describe-draft.ts"
+import { EditDraft } from "../../application/edit-draft.ts"
 import { ListDrafts } from "../../application/list-drafts.ts"
 import { DraftUnavailable } from "../../domain/ports/draft-writer.ts"
 import { PgDraftRepositoryLive } from "../../infrastructure/persistence/pg-draft-repository.ts"
@@ -284,6 +285,7 @@ const server = (answers: ReadonlyArray<ScriptedAnswer>) =>
           DescribeCurrentUser.Default,
           DescribeDigest.Default,
           DescribeDraft.Default,
+          EditDraft.Default,
           DescribeRun.Default,
           DisconnectRepository.Default,
           ListReachableRepositories.Default,
@@ -353,6 +355,8 @@ interface DraftBody {
   readonly runId: string
   readonly digestId: string
   readonly body: string
+  readonly editedBody: string | null
+  readonly editedAt: string | null
   readonly model: string
   readonly inputTokens: number | null
   readonly outputTokens: number | null
@@ -362,6 +366,11 @@ interface DraftBody {
 const post = (session: string | undefined, path: string, body: unknown) =>
   Effect.flatMap(HttpClient.HttpClient, (http) =>
     HttpClientRequest.post(path).pipe(asSignedIn(session), HttpClientRequest.bodyUnsafeJson(body), http.execute)
+  )
+
+const patch = (session: string | undefined, path: string, body: unknown) =>
+  Effect.flatMap(HttpClient.HttpClient, (http) =>
+    HttpClientRequest.patch(path).pipe(asSignedIn(session), HttpClientRequest.bodyUnsafeJson(body), http.execute)
   )
 
 const get = (session: string | undefined, path: string) =>
@@ -551,6 +560,7 @@ interface DraftSummaryBody {
   readonly day: string
   readonly timeZone: string
   readonly isQuiet: boolean
+  readonly isEdited: boolean
   readonly model: string
   readonly generatedAt: string
 }
@@ -706,6 +716,160 @@ describe("Opening one Draft by its own id", () => {
       assert.deepStrictEqual(yield* refused.json, yield* unknown.json)
 
       assert.strictEqual((yield* get(undefined, `/v1/drafts/${listed?.id}`)).status, 401)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+})
+
+const MY_OWN_WORDS =
+  "Spent the day on the boundary between collecting a day and writing about it. " +
+  "Worth it: the expensive half now runs once."
+
+/**
+ * The point of the whole product is that the Draft is a starting point, not a
+ * verdict. What these hold is that a User's own words stick, that they are kept
+ * beside the generated prose rather than on top of it — which is what stops
+ * regeneration (#11) silently destroying work a human put in — and that an
+ * edited Draft can be told apart from an untouched one without opening it.
+ */
+describe("Editing a Draft", () => {
+  it.live("keeps the User's words, and reads them back", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      const response = yield* patch(session, `/v1/drafts/${listed?.id}`, { body: MY_OWN_WORDS })
+      assert.strictEqual(response.status, 200)
+      const edited = (yield* response.json) as DraftBody
+
+      assert.strictEqual(edited.editedBody, MY_OWN_WORDS)
+      assert.isNotNull(edited.editedAt)
+
+      // And it is still there on the next read, from a fresh request.
+      const reread = (yield* Effect.flatMap(get(session, `/v1/drafts/${listed?.id}`), (r) => r.json)) as DraftBody
+      assert.strictEqual(reread.editedBody, MY_OWN_WORDS)
+      assert.strictEqual(reread.editedAt, edited.editedAt)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("keeps what the model wrote, separately", () =>
+    Effect.gen(function* () {
+      const { runs, session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      yield* patch(session, `/v1/drafts/${listed?.id}`, { body: MY_OWN_WORDS })
+
+      const edited = (yield* Effect.flatMap(get(session, `/v1/drafts/${listed?.id}`), (r) => r.json)) as DraftBody
+      // The generated prose survives the edit. #11 needs it to compare against,
+      // and nothing can learn what a User always changes once it is gone.
+      assert.strictEqual(edited.body, FIRST_DRAFT)
+      assert.strictEqual(edited.editedBody, MY_OWN_WORDS)
+
+      // Editing rewrites the prose and nothing else: the Draft is still the one
+      // that Run wrote, from that Digest, with that model.
+      assert.strictEqual(edited.runId, runs[0]?.id)
+      assert.strictEqual(edited.model, "fake/scripted")
+      assert.strictEqual((yield* draftsFor(runs[0]?.id ?? ""))[0]?.count, "1")
+
+      // The Draft the Run points at is the edited one, not a second copy.
+      const throughTheRun = (yield* Effect.flatMap(
+        get(session, `/v1/runs/${runs[0]?.id}/draft`),
+        (r) => r.json
+      )) as DraftBody
+      assert.strictEqual(throughTheRun.editedBody, MY_OWN_WORDS)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("leaves the Digest it was written from exactly as it was", () =>
+    Effect.gen(function* () {
+      const { runs, session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      const before = yield* Effect.flatMap(get(session, `/v1/runs/${runs[0]?.id}/digest`), (r) => r.json)
+
+      yield* patch(session, `/v1/drafts/${listed?.id}`, { body: MY_OWN_WORDS })
+
+      // A Digest is the record of what happened that day. Rewriting the post
+      // does not rewrite the day.
+      const after = yield* Effect.flatMap(get(session, `/v1/runs/${runs[0]?.id}/digest`), (r) => r.json)
+      assert.deepStrictEqual(after, before)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("marks it as edited, in the list and in full", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20", "2026-08-21"])
+      const [newest, older] = (yield* listDrafts(session)).items
+
+      assert.strictEqual(newest?.isEdited, false)
+
+      yield* patch(session, `/v1/drafts/${newest?.id}`, { body: MY_OWN_WORDS })
+
+      const page = yield* listDrafts(session)
+      assert.strictEqual(page.items[0]?.id, newest?.id)
+      assert.strictEqual(page.items[0]?.isEdited, true)
+      // The one nobody touched is unchanged, so the mark means something.
+      assert.strictEqual(page.items[1]?.id, older?.id)
+      assert.strictEqual(page.items[1]?.isEdited, false)
+
+      const untouched = (yield* Effect.flatMap(get(session, `/v1/drafts/${older?.id}`), (r) => r.json)) as DraftBody
+      assert.isNull(untouched.editedBody)
+      assert.isNull(untouched.editedAt)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }, { body: SECOND_DRAFT }])))
+  )
+
+  it.live("takes the latest edit and forgets the one before it", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      yield* patch(session, `/v1/drafts/${listed?.id}`, { body: "A first pass at rewriting it." })
+      yield* patch(session, `/v1/drafts/${listed?.id}`, { body: MY_OWN_WORDS })
+
+      const edited = (yield* Effect.flatMap(get(session, `/v1/drafts/${listed?.id}`), (r) => r.json)) as DraftBody
+      assert.strictEqual(edited.editedBody, MY_OWN_WORDS)
+      assert.strictEqual(edited.body, FIRST_DRAFT)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("refuses an edit that leaves nothing to post", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      assert.strictEqual((yield* patch(session, `/v1/drafts/${listed?.id}`, { body: "" })).status, 400)
+      assert.strictEqual((yield* patch(session, `/v1/drafts/${listed?.id}`, { body: "   " })).status, 400)
+      assert.strictEqual((yield* patch(session, `/v1/drafts/${listed?.id}`, {})).status, 400)
+
+      // Nothing was written: the Draft is exactly as the model left it.
+      const draft = (yield* Effect.flatMap(get(session, `/v1/drafts/${listed?.id}`), (r) => r.json)) as DraftBody
+      assert.strictEqual(draft.body, FIRST_DRAFT)
+      assert.isNull(draft.editedBody)
+    }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
+  )
+
+  it.live("cannot be reached by anybody but its owner", () =>
+    Effect.gen(function* () {
+      const { session } = yield* draftsAcross(["2026-08-20"])
+      const listed = (yield* listDrafts(session)).items[0]
+
+      const stranger = yield* arrive(HUBOT_CODE, HUBOT_INSTALLATION)
+
+      const refused = yield* patch(stranger, `/v1/drafts/${listed?.id}`, { body: MY_OWN_WORDS })
+      const unknown = yield* patch(stranger, "/v1/drafts/00000000-0000-4000-8000-000000000000", {
+        body: MY_OWN_WORDS
+      })
+
+      assert.strictEqual(refused.status, 404)
+      assert.strictEqual(unknown.status, 404)
+      // The same answer either way: the 404 confirmed nothing.
+      assert.deepStrictEqual(yield* refused.json, yield* unknown.json)
+
+      assert.strictEqual((yield* patch(undefined, `/v1/drafts/${listed?.id}`, { body: MY_OWN_WORDS })).status, 401)
+
+      // And the owner's Draft was left alone.
+      const mine = (yield* Effect.flatMap(get(session, `/v1/drafts/${listed?.id}`), (r) => r.json)) as DraftBody
+      assert.isNull(mine.editedBody)
+      assert.strictEqual(mine.body, FIRST_DRAFT)
     }).pipe(Effect.provide(server([{ body: FIRST_DRAFT }])))
   )
 })

@@ -5,6 +5,7 @@ import { AraApi } from "../../../http/api.ts"
 import type { RunId } from "../../../runs/domain/run.ts"
 import { DraftPageResponse, DraftResponse, DraftSummaryResponse, NoSuchDraft } from "../../api.ts"
 import { DescribeDraft } from "../../application/describe-draft.ts"
+import { EditDraft } from "../../application/edit-draft.ts"
 import { ListDrafts } from "../../application/list-drafts.ts"
 import {
   type DraftCursor,
@@ -20,6 +21,8 @@ const toResponse = (draft: StoredDraft) =>
     runId: draft.runId,
     digestId: draft.digestId,
     body: draft.body,
+    editedBody: draft.editedBody,
+    editedAt: draft.editedAt,
     model: draft.model,
     inputTokens: draft.inputTokens,
     outputTokens: draft.outputTokens,
@@ -38,6 +41,7 @@ const toSummary = (summary: DraftSummary) =>
     day: summary.dayWindow.day,
     timeZone: summary.dayWindow.timeZone,
     isQuiet: summary.isQuiet,
+    isEdited: summary.isEdited,
     model: summary.model,
     generatedAt: summary.generatedAt
   })
@@ -94,6 +98,18 @@ export const DraftsHandlersLive = HttpApiBuilder.group(AraApi, "drafts", (handle
 
         const draft = yield* describe
           .byId(user, path.id as DraftId)
+          .pipe(Effect.mapError(() => new NoSuchDraft({ message: "No such Draft" })))
+
+        return toResponse(draft)
+      })
+    )
+    .handle("edit", ({ path, payload }) =>
+      Effect.gen(function* () {
+        const user = yield* CurrentUser
+        const edit = yield* EditDraft
+
+        const draft = yield* edit
+          .execute(user, path.id as DraftId, payload.body)
           .pipe(Effect.mapError(() => new NoSuchDraft({ message: "No such Draft" })))
 
         return toResponse(draft)
