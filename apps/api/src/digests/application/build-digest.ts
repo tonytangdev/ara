@@ -55,7 +55,7 @@ export class BuildDigest extends Effect.Service<BuildDigest>()("application/dige
         // Oldest first: a day reads forwards, whatever order the Forge listed it in.
         .sort(
           (left, right) =>
-            DateTime.toEpochMillis(left.commit.committedAt) - DateTime.toEpochMillis(right.commit.committedAt)
+            DateTime.toEpochMillis(left.commit.authoredAt) - DateTime.toEpochMillis(right.commit.authoredAt)
         )
 
     /**

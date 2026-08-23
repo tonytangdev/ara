@@ -126,7 +126,7 @@ const commit = (sha: string, subject: string, files: ReadonlyArray<FileChange>) 
   new CommitActivity({
     sha,
     subject,
-    committedAt: DateTime.unsafeMake("2026-08-22T10:00:00.000Z"),
+    authoredAt: DateTime.unsafeMake("2026-08-22T10:00:00.000Z"),
     authorLogin: "octocat",
     authorIsBot: false,
     parentCount: 1,
