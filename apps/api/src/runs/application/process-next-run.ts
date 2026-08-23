@@ -5,6 +5,7 @@ import { WriteDraft } from "../../drafts/index.ts"
 import { JobQueue } from "../domain/ports/job-queue.ts"
 import { backoffFor, hasAttemptsLeft } from "../domain/retry-policy.ts"
 import type { Run } from "../domain/run.ts"
+import { RunCost } from "../domain/run-cost.ts"
 import { failureIn, finalReason, type RunFailure, type RunStage, unexpectedFailureIn } from "../domain/run-failure.ts"
 
 /**
@@ -67,10 +68,32 @@ export class ProcessNextRun extends Effect.Service<ProcessNextRun>()("applicatio
         })
         .pipe(Effect.mapError((failure) => failureIn("collecting", failure)))
 
+    /**
+     * Write the Draft, and attribute what it cost to the Run.
+     *
+     * The cost is copied from the Draft rather than computed here: the adapter
+     * that made the call is the only thing that knows the provider's prices,
+     * and the Run only has to remember the answer. Recording is a `set`, so a
+     * Run reclaimed after a deploy — which finds its Draft already written and
+     * does not buy another — records the same figure again rather than doubling
+     * it.
+     */
     const draft = (run: Run) =>
-      writeDraft
-        .execute({ runId: run.id, userId: run.userId })
-        .pipe(Effect.mapError((failure) => failureIn("drafting", failure)))
+      writeDraft.execute({ runId: run.id, userId: run.userId }).pipe(
+        Effect.tap((written) =>
+          queue.recordCost(
+            run.id,
+            new RunCost({
+              inputTokens: written.inputTokens,
+              outputTokens: written.outputTokens,
+              reasoningTokens: written.reasoningTokens,
+              totalTokens: written.totalTokens,
+              costUsd: written.costUsd
+            })
+          )
+        ),
+        Effect.mapError((failure) => failureIn("drafting", failure))
+      )
 
     /**
      * One attempt at a Run, resuming at the stage the last attempt stopped in.

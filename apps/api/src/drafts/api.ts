@@ -12,7 +12,9 @@ import { DRAFT_PAGE_SIZE, DraftCursorFromString, DraftShape, EditedBody } from "
  * The body is markdown, so it can be pasted wherever the User posts. `model`
  * and the token counts are part of the Draft rather than an admin view of it:
  * a User comparing two Drafts should be able to see which model wrote each, and
- * what the habit is costing, without asking anybody.
+ * what the habit is costing, without asking anybody. Reasoning tokens are their
+ * own line because on a reasoning model they are most of the bill, and a cost
+ * that cannot be broken down is a cost nobody can act on.
  *
  * `digestId` is here so that "why did it write that?" leads somewhere: the
  * Digest it was written from is a request away, and it is the only thing the
@@ -39,7 +41,11 @@ export class DraftResponse extends Schema.Class<DraftResponse>("DraftResponse")(
   model: Schema.String,
   inputTokens: Schema.NullOr(Schema.Int),
   outputTokens: Schema.NullOr(Schema.Int),
+  /** Thinking, counted apart from the output where the provider reports it that way. */
+  reasoningTokens: Schema.NullOr(Schema.Int),
   totalTokens: Schema.NullOr(Schema.Int),
+  /** US dollars, to six decimal places. Null when the provider reported no usage to price. */
+  costUsd: Schema.NullOr(Schema.Number),
   generatedAt: Schema.DateTimeUtc
 }) {}
 

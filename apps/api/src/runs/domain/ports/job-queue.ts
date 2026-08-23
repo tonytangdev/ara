@@ -3,6 +3,7 @@ import type { RepoConnection } from "../../../connections/domain/repo-connection
 import type { UserId } from "../../../connections/domain/user.ts"
 import type { DayWindow } from "../day-window.ts"
 import type { Run, RunId, RunOutcome, RunState, Trigger } from "../run.ts"
+import type { RunCost } from "../run-cost.ts"
 
 /** Everything needed to put a Run on the queue. */
 export interface RunRequest {
@@ -48,6 +49,15 @@ export class JobQueue extends Context.Tag("domain/runs/JobQueue")<
     readonly recordAttempt: (id: RunId, resumeAt: RunState) => Effect.Effect<number>
     /** Finish a Run, one way or the other. */
     readonly complete: (id: RunId, outcome: RunOutcome) => Effect.Effect<void>
+    /**
+     * Attribute what was spent to the Run.
+     *
+     * It sets rather than adds, so a Run reclaimed after a deploy records the
+     * same cost twice over and still reads as one Draft's worth. Recording is
+     * separate from completing because a Run that spent money and then failed
+     * has still spent it, and a User is owed that number either way.
+     */
+    readonly recordCost: (id: RunId, cost: RunCost) => Effect.Effect<void>
     /**
      * Return Runs abandoned mid-flight to `queued`, and answer with how many.
      * Run at boot: a Run that a deploy interrupted is otherwise stuck in a state

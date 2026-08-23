@@ -73,7 +73,15 @@ export class WrittenDraft extends Schema.Class<WrittenDraft>("WrittenDraft")({
   model: Schema.String,
   inputTokens: Schema.NullOr(Schema.Int),
   outputTokens: Schema.NullOr(Schema.Int),
-  totalTokens: Schema.NullOr(Schema.Int)
+  /**
+   * What the model spent thinking, where the provider reports it apart from the
+   * output tokens. On a reasoning model this is most of the bill, so it is a
+   * number in its own right rather than a detail folded into the total.
+   */
+  reasoningTokens: Schema.NullOr(Schema.Int),
+  totalTokens: Schema.NullOr(Schema.Int),
+  /** What the call cost in US dollars, priced from the counts above. Null when the provider said nothing. */
+  costUsd: Schema.NullOr(Schema.Number)
 }) {}
 
 /**
@@ -118,7 +126,9 @@ export class StoredDraft extends Schema.Class<StoredDraft>("StoredDraft")({
   model: Schema.String,
   inputTokens: Schema.NullOr(Schema.Int),
   outputTokens: Schema.NullOr(Schema.Int),
+  reasoningTokens: Schema.NullOr(Schema.Int),
   totalTokens: Schema.NullOr(Schema.Int),
+  costUsd: Schema.NullOr(Schema.Number),
   generatedAt: Schema.DateTimeUtc
 }) {}
 

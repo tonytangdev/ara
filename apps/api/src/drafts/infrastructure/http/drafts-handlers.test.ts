@@ -399,7 +399,9 @@ interface DraftBody {
   readonly model: string
   readonly inputTokens: number | null
   readonly outputTokens: number | null
+  readonly reasoningTokens: number | null
   readonly totalTokens: number | null
+  readonly costUsd: number | null
 }
 
 const post = (session: string | undefined, path: string, body: unknown) =>
@@ -470,8 +472,12 @@ describe("Reading the Draft a Run wrote", () => {
       // both are questions asked of it later.
       assert.strictEqual(draft.model, "fake/scripted")
       assert.strictEqual(draft.inputTokens, 1_200)
-      assert.strictEqual(draft.outputTokens, 300)
-      assert.strictEqual(draft.totalTokens, 1_500)
+      assert.strictEqual(draft.outputTokens, 3_000)
+      // Thinking, reported apart from the prose it led to: on a reasoning model
+      // this is most of what was paid for.
+      assert.strictEqual(draft.reasoningTokens, 2_700)
+      assert.strictEqual(draft.totalTokens, 4_200)
+      assert.strictEqual(draft.costUsd, 0.00822)
 
       // It points back at the Digest it was written from, which is what makes
       // "why did it write that?" answerable.

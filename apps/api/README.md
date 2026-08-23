@@ -156,6 +156,25 @@ twenty-four calls. It is caught at the adapter, again before anything is
 persisted, and refused a third time by a `check` constraint on the table — a
 Run fails without a Draft rather than succeeding with an empty one.
 
+### Rate limits and what a Run costs
+
+Both outbound adapters meter themselves. GitHub is limited **per App
+installation** (ADR-0005), so one busy User spends their own quota and nobody
+else's; the model has one budget, because that bill is Ara's own. Both bound a
+single call with a timeout that covers waiting for a turn as well as the call
+itself, so a spent budget and a provider that stopped answering come out the
+same way: a *retryable* failure at the port, for the Run lifecycle to act on.
+None of this is visible at a call site — a use case asks for Activity or for
+prose and gets one or the other.
+
+A Draft records the tokens it used, the reasoning tokens among them, and what
+that came to in dollars at the configured prices. The Run carries the same
+figures, because the Run id is the one a User holds: `GET /v1/runs/:id` answers
+what yesterday's post cost without anybody having to find a Draft first.
+Reasoning tokens are a *breakdown* of the output tokens rather than an addition
+to them, so they are reported and not re-charged — on a reasoning model they are
+most of the bill either way, which is why they get a line of their own.
+
 The OpenAPI document is derived from the endpoint schemas, so documenting a new
 route means annotating it in the module's `api.ts` — nothing to keep in sync.
 Scalar's script is inlined from `@effect/platform`, so the page loads offline.
@@ -195,8 +214,17 @@ pnpm typecheck
 | `OPENROUTER_API_KEY` | _required_ | Where the model is reached      |
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1` | The provider's base URL |
 | `DRAFT_MODEL`       | `moonshotai/kimi-k3` | Which model writes a Draft |
-| `DRAFT_MAX_ATTEMPTS` | `5`        | Attempts before a Draft gives up |
-| `DRAFT_RETRY_BASE_DELAY` | `2 seconds` | First backoff; doubles with jitter |
+| `RUN_MAX_ATTEMPTS` | `5`          | Attempts before a Run gives up      |
+| `RUN_RETRY_BASE_DELAY` | `2 seconds` | First backoff; doubles with jitter |
+| `RUN_RETRY_MAX_DELAY` | `2 minutes` | Where the doubling stops           |
+| `GITHUB_RATE_LIMIT` | `5000`   | Calls allowed per installation      |
+| `GITHUB_RATE_LIMIT_INTERVAL` | `1 hour` | The window that budget covers |
+| `GITHUB_REQUEST_TIMEOUT` | `30 seconds` | One GitHub call, waiting for a turn included |
+| `MODEL_RATE_LIMIT` | `20`         | Model calls allowed per interval    |
+| `MODEL_RATE_LIMIT_INTERVAL` | `1 minute` | The window that budget covers |
+| `MODEL_REQUEST_TIMEOUT` | `2 minutes` | One model call, waiting for a turn included |
+| `MODEL_INPUT_USD_PER_MILLION_TOKENS` | `0.6` | What input tokens cost |
+| `MODEL_OUTPUT_USD_PER_MILLION_TOKENS` | `2.5` | What output tokens cost |
 
 The credentials have no defaults on purpose: an unconfigured deployment should
 fail to boot rather than quietly try a well-known password. `pnpm dev` and

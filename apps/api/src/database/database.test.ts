@@ -58,7 +58,16 @@ describe("Postgres", () => {
       `
       assert.deepStrictEqual(
         applied.map((row) => row.name),
-        ["schema_foundations", "users_and_sessions", "repo_connections", "runs", "digests", "drafts", "draft_edits"]
+        [
+          "schema_foundations",
+          "users_and_sessions",
+          "repo_connections",
+          "runs",
+          "digests",
+          "drafts",
+          "draft_edits",
+          "run_and_draft_cost"
+        ]
       )
 
       const functions = yield* sql`select proname from pg_proc where proname = 'set_updated_at'`

@@ -14,6 +14,7 @@ import { SecretCipher } from "./infrastructure/crypto/secret-cipher.ts"
 import { GithubAppJwt } from "./infrastructure/github/github-app-jwt.ts"
 import { GithubAuthorizationLive } from "./infrastructure/github/github-authorization.ts"
 import { GithubInstallationTokensLive } from "./infrastructure/github/github-installation-tokens.ts"
+import { GithubRateLimiterLive } from "./infrastructure/github/github-rate-limiter.ts"
 import { GithubReachableRepositoriesLive } from "./infrastructure/github/github-reachable-repositories.ts"
 import { ConnectionsHandlersLive } from "./infrastructure/http/connections-handlers.ts"
 import { RepoConnectionsHandlersLive } from "./infrastructure/http/repo-connections-handlers.ts"
@@ -46,6 +47,7 @@ export const InstallationTokensLive = GithubInstallationTokensLive.pipe(
  */
 const GithubLive = Layer.mergeAll(GithubAuthorizationLive, GithubReachableRepositoriesLive).pipe(
   Layer.provideMerge(InstallationTokensLive),
+  Layer.provide(GithubRateLimiterLive),
   Layer.provide(GithubAppJwt.Default),
   Layer.provide(FetchHttpClient.layer)
 )
@@ -115,6 +117,13 @@ export { RepoConnection, RepoConnectionId, RepoConnectionNotFound } from "./doma
 export { Repository } from "./domain/repository.ts"
 export { DEFAULT_TIME_ZONE, TimeZone } from "./domain/time-zone.ts"
 export { User, UserId } from "./domain/user.ts"
+/**
+ * Ara's per-installation budget for calling GitHub (ADR-0005), exported for
+ * the same reason the token cache is: the digests module's GitHub adapter has
+ * to spend the *same* budget, and it can only do that by being given this
+ * layer value rather than building one of its own.
+ */
+export { GithubRateLimiter, GithubRateLimiterLive } from "./infrastructure/github/github-rate-limiter.ts"
 /**
  * The Repo Connection adapter on its own, for modules that need the port but
  * not the rest of this one. The runs module asks whether a Run is entitled to

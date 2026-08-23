@@ -11,6 +11,7 @@ import { WriteDraft } from "../../drafts/index.ts"
 import { CalendarDay, DayWindow } from "../domain/day-window.ts"
 import { JobQueue } from "../domain/ports/job-queue.ts"
 import { Run, RunId, type RunOutcome, type RunState } from "../domain/run.ts"
+import type { RunCost } from "../domain/run-cost.ts"
 import { ProcessNextRun } from "./process-next-run.ts"
 
 /**
@@ -48,6 +49,7 @@ const queuedRun = new Run({
   state: "queued",
   attempts: 0,
   failureReason: null,
+  cost: null,
   requestedAt: SOMETIME,
   startedAt: null,
   finishedAt: null
@@ -77,6 +79,7 @@ const jobQueueOver = (state: Ref.Ref<Run>) =>
           const attempted = new Run({ ...run, state: resumeAt, attempts: run.attempts + 1 })
           return [attempted.attempts, attempted]
         }),
+      recordCost: (_id, cost: RunCost) => Ref.update(state, (run) => new Run({ ...run, cost })),
       complete: (_id, outcome: RunOutcome) =>
         Ref.update(
           state,
@@ -127,7 +130,9 @@ const aDraft = new StoredDraft({
   model: "fake/scripted",
   inputTokens: 1_200,
   outputTokens: 300,
+  reasoningTokens: 900,
   totalTokens: 1_500,
+  costUsd: 0.021,
   generatedAt: SOMETIME
 })
 

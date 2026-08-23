@@ -24,6 +24,7 @@ const toResponse = (run: Run) =>
     windowStartsAt: run.dayWindow.startsAt,
     windowEndsAt: run.dayWindow.endsAt,
     attempts: run.attempts,
+    cost: run.cost,
     failureReason: run.failureReason,
     requestedAt: run.requestedAt,
     startedAt: run.startedAt,

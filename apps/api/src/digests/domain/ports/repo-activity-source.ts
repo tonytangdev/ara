@@ -22,8 +22,12 @@ export interface ActivityRequest {
  *
  * `retryable` is that distinction, and it is made in the adapter because only
  * the caller of the Forge can tell a rate limit from a revoked installation.
- * Adding rate limiting inside an adapter therefore changes nothing above this
- * line: whatever the adapter cannot ride out, it classifies.
+ * The case it exists for is the one that looks like a hard failure and is not:
+ * a rate limit, Ara's own or GitHub's, means "not now" rather than "never", and
+ * a Run that gave up on it would fail a User for being busy. Rate limiting
+ * inside an adapter therefore changes nothing above this line: whatever the
+ * adapter cannot ride out, it classifies, and what is then done about it is the
+ * Run lifecycle's business rather than this port's.
  *
  * It defaults to terminal. Saying a failure is worth retrying is a claim about
  * it, and a failure nobody has classified should stop and explain itself rather

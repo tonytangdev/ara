@@ -7,6 +7,7 @@ import runs from "./0004_runs.ts"
 import digests from "./0005_digests.ts"
 import drafts from "./0006_drafts.ts"
 import draftEdits from "./0007_draft_edits.ts"
+import runAndDraftCost from "./0008_run_and_draft_cost.ts"
 
 /**
  * Every migration, in order. Keys are `<id>_<name>`; ids must be unique and
@@ -20,5 +21,6 @@ export const migrations: Record<string, Effect.Effect<void, unknown, SqlClient.S
   "0004_runs": runs,
   "0005_digests": digests,
   "0006_drafts": drafts,
-  "0007_draft_edits": draftEdits
+  "0007_draft_edits": draftEdits,
+  "0008_run_and_draft_cost": runAndDraftCost
 }

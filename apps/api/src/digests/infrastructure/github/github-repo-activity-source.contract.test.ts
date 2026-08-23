@@ -3,7 +3,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer, Schema } from "effect"
 import { Repository } from "../../../connections/domain/repository.ts"
 import { TimeZone } from "../../../connections/domain/time-zone.ts"
-import { InstallationTokensLive } from "../../../connections/index.ts"
+import { GithubRateLimiterLive, InstallationTokensLive } from "../../../connections/index.ts"
 import { CalendarDay, DayWindow } from "../../../runs/domain/day-window.ts"
 import { RepositoryActivity } from "../../domain/activity.ts"
 import { RepoActivitySource } from "../../domain/ports/repo-activity-source.ts"
@@ -61,6 +61,7 @@ const dayWindow = new DayWindow({
 
 const Live = GithubRepoActivitySourceLive.pipe(
   Layer.provide(InstallationTokensLive),
+  Layer.provide(GithubRateLimiterLive),
   Layer.provide(FetchHttpClient.layer)
 )
 

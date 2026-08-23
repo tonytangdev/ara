@@ -17,7 +17,10 @@ interface DraftRow {
   readonly model: string
   readonly input_tokens: number | null
   readonly output_tokens: number | null
+  readonly reasoning_tokens: number | null
   readonly total_tokens: number | null
+  /** `numeric` reaches the driver as text, so that six decimal places of a dollar arrive intact. */
+  readonly cost_usd: string | null
   readonly generated_at: Date
 }
 
@@ -40,12 +43,15 @@ const toStoredDraft = (row: DraftRow) =>
     model: row.model,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
+    reasoningTokens: row.reasoning_tokens,
     totalTokens: row.total_tokens,
+    costUsd: row.cost_usd === null ? null : Number(row.cost_usd),
     generatedAt: row.generated_at.toISOString()
   })
 
 const COLUMNS =
-  "id, run_id, digest_id, body, edited_body, edited_at, model, input_tokens, output_tokens, total_tokens, generated_at"
+  "id, run_id, digest_id, body, edited_body, edited_at, model, " +
+  "input_tokens, output_tokens, reasoning_tokens, total_tokens, cost_usd, generated_at"
 
 /**
  * One row of the Draft list: the Draft, plus the two things that say which day
@@ -117,10 +123,14 @@ export const PgDraftRepositoryLive = Layer.effect(
       // a saved Draft comes back knowing its own shape without a second read.
       sql<DraftRow>`
         with written as (
-          insert into drafts (run_id, user_id, digest_id, body, model, input_tokens, output_tokens, total_tokens)
+          insert into drafts (
+            run_id, user_id, digest_id, body, model,
+            input_tokens, output_tokens, reasoning_tokens, total_tokens, cost_usd
+          )
           values (
             ${runId}, ${userId}, ${digestId}, ${written.body}, ${written.model},
-            ${written.inputTokens}, ${written.outputTokens}, ${written.totalTokens}
+            ${written.inputTokens}, ${written.outputTokens}, ${written.reasoningTokens},
+            ${written.totalTokens}, ${written.costUsd}
           )
           returning ${sql.unsafe(COLUMNS)}
         )
