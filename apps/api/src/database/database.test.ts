@@ -57,7 +57,7 @@ describe("Postgres", () => {
       `
       assert.deepStrictEqual(
         applied.map((row) => row.name),
-        ["schema_foundations", "users_and_sessions"]
+        ["schema_foundations", "users_and_sessions", "repo_connections"]
       )
 
       const functions = yield* sql`select proname from pg_proc where proname = 'set_updated_at'`
@@ -69,7 +69,7 @@ describe("Postgres", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       const applied = yield* sql`select name from ${sql(MigrationsTable)}`
-      assert.lengthOf(applied, 2)
+      assert.lengthOf(applied, 3)
     }).pipe(Effect.provide(MigrationsLive.pipe(Layer.provideMerge(disposablePg()))))
   )
 

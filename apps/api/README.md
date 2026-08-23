@@ -13,8 +13,9 @@ src/
     index.ts                     its public face: `ConnectionsLive`, fully wired
     domain/
       user.ts, session.ts, installation.ts, forge-credential.ts
+      repository.ts, repo-connection.ts
       ports/                     driven ports: repositories, `GithubAuthorization`,
-                                 `InstallationTokens`
+                                 `InstallationTokens`, `ReachableRepositories`
     application/                 one file per use case
     infrastructure/
       http/                        handlers + the session authentication middleware
@@ -78,6 +79,10 @@ so a green `pnpm test` needs a Docker daemon but never `docker compose up`.
 | GET    | `/v1/auth/github/callback`        | Completes sign-in and sets the session cookie.                  |
 | GET    | `/v1/auth/github/installation`    | Where GitHub sends someone after installing the App.            |
 | GET    | `/v1/me`                          | The signed-in User; `401` without a valid session.              |
+| GET    | `/v1/repositories`                | Repositories the caller's installations can reach.              |
+| POST   | `/v1/repo-connections`            | `201` with the Repo Connection; `422` if it is not reachable.   |
+| GET    | `/v1/repo-connections`            | The caller's Repo Connections, and nobody else's.               |
+| DELETE | `/v1/repo-connections/:id`        | `204`, or `404` if the caller does not own one with that id.    |
 
 Everything new lives under `/v1`. `/health` stays unversioned because platform
 probes depend on the path.
@@ -85,7 +90,7 @@ probes depend on the path.
 ## Signing in
 
 Ara authorizes as a **GitHub App**, not an OAuth App
-([ADR-0005](../../docs/adr/0005-github-app-not-oauth-app.md)). Three consequences
+([ADR-0005](../../docs/adr/0005-github-app-not-oauth-app.md)). Four consequences
 run through the connections module:
 
 - **Identity and access are separate.** Signing in creates a User; installing
@@ -100,10 +105,33 @@ run through the connections module:
 - **Nothing secret reaches a log.** Credentials are `Redacted`, and request
   logging goes through `http/logging.ts`, which replaces the `code` and `state`
   parameters GitHub puts on the callback URL.
+- **What Ara can reach is an authorization question.** `GET /v1/repositories`
+  asks the installation what it can see rather than asking GitHub what the
+  person owns, because repository selection happens on GitHub's installation
+  screen. Connecting is checked against that list, so a Repo Connection always
+  means Ara can read the repository today.
 - **Authorization is GitHub-shaped and stays outside the Activity port.**
   `GithubAuthorization` and `InstallationTokens` are named for the Forge on
   purpose; `RepoActivitySource` will ask this module for a credential rather
   than owning one ([ADR-0003](../../docs/adr/0003-forge-agnostic-ports.md)).
+
+## Repo Connections
+
+A Repo Connection is a User's authorized link to one repository, and owning it
+is what entitles that User to Digests and Drafts for it. Repository identity is
+`(forge, owner, name)` — three columns, never a parsed `owner/name` string
+([ADR-0003](../../docs/adr/0003-forge-agnostic-ports.md)).
+
+Ownership is enforced in the SQL rather than by a check somebody has to
+remember: every statement in `pg-repo-connection-repository.ts` carries
+`user_id`, so a lookup by id alone is not expressible. Asking about somebody
+else's connection and asking about one that never existed give the same 404.
+
+What is stored against a connection is which installation it reads through, not
+a credential; the token is minted when a repository is actually read. Deleting a
+connection stops Ara reading the repository from then on and leaves the Drafts
+already generated intact — Runs and Drafts keep their own copy of the repository
+identity and let go of the connection.
 
 Local development needs a real GitHub App and a callback URL that reaches your
 machine. See `.env.example` for the four values it wants.
