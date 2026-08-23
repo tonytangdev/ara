@@ -98,6 +98,24 @@ export const PgJobQueueLive = Layer.effect(
     const advance = (id: RunId, state: RunState) =>
       Effect.asVoid(sql`update runs set state = ${state} where id = ${id}`).pipe(Effect.orDie)
 
+    // `attempts` is incremented here as well as on the claim, so the column
+    // counts what its name says — every attempt at the Run, whether a fresh
+    // claim or a retry inside one — and a User reading a failed Run can see how
+    // many times Ara tried.
+    const recordAttempt = (id: RunId, resumeAt: RunState) =>
+      sql<{ readonly attempts: number }>`
+        update runs
+        set attempts = attempts + 1, state = ${resumeAt}
+        where id = ${id}
+        returning attempts
+      `.pipe(
+        Effect.flatMap((rows) =>
+          rows[0] === undefined ? Effect.dieMessage("recording an attempt matched no Run") : Effect.succeed(rows[0])
+        ),
+        Effect.map((row) => row.attempts),
+        Effect.orDie
+      )
+
     const complete = (id: RunId, outcome: RunOutcome) =>
       Effect.asVoid(sql`
         update runs
@@ -117,6 +135,6 @@ export const PgJobQueueLive = Layer.effect(
       Effect.orDie
     )
 
-    return JobQueue.of({ enqueue, claim, advance, complete, requeueInterrupted })
+    return JobQueue.of({ enqueue, claim, advance, recordAttempt, complete, requeueInterrupted })
   })
 )

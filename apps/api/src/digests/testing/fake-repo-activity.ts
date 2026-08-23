@@ -3,7 +3,7 @@ import { RepoConnectionRepositoryLive } from "../../connections/index.ts"
 import { BuildDigest } from "../application/build-digest.ts"
 import { CollectDigest } from "../application/collect-digest.ts"
 import { CommitActivity, FileChange, RepositoryActivity } from "../domain/activity.ts"
-import { type ActivityRequest, RepoActivitySource } from "../domain/ports/repo-activity-source.ts"
+import { type ActivityRequest, ActivityUnavailable, RepoActivitySource } from "../domain/ports/repo-activity-source.ts"
 import { PgDigestRepositoryLive } from "../infrastructure/persistence/pg-digest-repository.ts"
 
 /**
@@ -53,6 +53,24 @@ export const busyRepoActivitySource = repoActivitySourceOf(
       ],
       pullRequests: []
     })
+)
+
+/**
+ * A Forge that will not answer, and says why.
+ *
+ * The failure carries its own classification, exactly as the GitHub adapter's
+ * does, because whether a Run should try again is the adapter's judgement and
+ * not the test's.
+ */
+export const repoActivitySourceFailing = (failure: ActivityUnavailable) =>
+  Layer.succeed(RepoActivitySource, RepoActivitySource.of({ activityFor: () => Effect.fail(failure) }))
+
+/** Access is gone rather than shaky: a Run that meets this stops instead of retrying. */
+export const unreachableRepoActivitySource = repoActivitySourceFailing(
+  new ActivityUnavailable({
+    reason: "Ara can no longer reach octocat/ara. Its access to the repository may have been revoked.",
+    retryable: false
+  })
 )
 
 /** The collect stage, reading from a fixture and writing to a real database. */

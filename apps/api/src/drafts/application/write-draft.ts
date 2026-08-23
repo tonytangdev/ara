@@ -1,5 +1,4 @@
-import { Effect, Option, Schedule } from "effect"
-import { DraftConfig } from "../../config.ts"
+import { Effect, Option } from "effect"
 import type { UserId } from "../../connections/domain/user.ts"
 import { DigestRepository } from "../../digests/domain/ports/digest-repository.ts"
 import type { RunId } from "../../runs/domain/run.ts"
@@ -38,25 +37,15 @@ export interface WriteDraftRequest {
  *   not.
  * - Blank prose is never persisted. The model sometimes answers with reasoning
  *   and no message content, which is not an HTTP error and which a naive
- *   pipeline would happily store as an empty Draft. It is a retryable failure,
- *   and it is retried here.
+ *   pipeline would happily store as an empty Draft. It leaves here as a
+ *   retryable failure; the Run is what retries it, on the one attempt budget
+ *   that covers both stages.
  */
 export class WriteDraft extends Effect.Service<WriteDraft>()("application/drafts/WriteDraft", {
   effect: Effect.gen(function* () {
-    const { maxAttempts, retryBaseDelay } = yield* DraftConfig
     const digests = yield* DigestRepository
     const writer = yield* DraftWriter
     const drafts = yield* DraftRepository
-
-    /**
-     * Exponential with jitter, bounded. Jitter matters because several Runs
-     * that hit the same rate limit would otherwise come back in step and hit
-     * it together again.
-     */
-    const retryPolicy = Schedule.exponential(retryBaseDelay).pipe(
-      Schedule.jittered,
-      Schedule.intersect(Schedule.recurs(Math.max(maxAttempts - 1, 0)))
-    )
 
     const write = (digest: Parameters<typeof writer.writeDraft>[0]["digest"]) =>
       writer.writeDraft({ digest }).pipe(
@@ -72,8 +61,7 @@ export class WriteDraft extends Effect.Service<WriteDraft>()("application/drafts
                 })
               )
             : Effect.succeed(written)
-        ),
-        Effect.retry({ schedule: retryPolicy, while: (failure: DraftUnavailable) => failure.retryable })
+        )
       )
 
     const execute = (request: WriteDraftRequest): Effect.Effect<StoredDraft, DraftUnavailable> =>

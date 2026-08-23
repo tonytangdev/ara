@@ -194,8 +194,9 @@ const TestConfig = Layer.setConfigProvider(
       ["SESSION_SECURE_COOKIES", "false"],
       ["AFTER_SIGN_IN_URL", "/v1/me"],
       // The backoff is real behaviour and is asserted on; waiting out the real
-      // one would only be asserting that the clock works.
-      ["DRAFT_RETRY_BASE_DELAY", "1 millis"]
+      // one would only be asserting that the clock works. Retrying is the Run's
+      // job now (#12), so it is the Run's knob that is turned down.
+      ["RUN_RETRY_BASE_DELAY", "1 millis"]
     ])
   )
 )

@@ -17,11 +17,21 @@ export interface ActivityRequest {
 
 /**
  * The Activity could not be read. One failure covers "GitHub is having a bad
- * minute" and "the App was uninstalled" on purpose: from here they are the same
- * fact, and telling them apart in order to retry differently is #12's job.
+ * minute" and "the App was uninstalled", because from here they are the same
+ * fact — with one distinction the Run needs in order to recover.
+ *
+ * `retryable` is that distinction, and it is made in the adapter because only
+ * the caller of the Forge can tell a rate limit from a revoked installation.
+ * Adding rate limiting inside an adapter therefore changes nothing above this
+ * line: whatever the adapter cannot ride out, it classifies.
+ *
+ * It defaults to terminal. Saying a failure is worth retrying is a claim about
+ * it, and a failure nobody has classified should stop and explain itself rather
+ * than quietly cost five attempts.
  */
 export class ActivityUnavailable extends Schema.TaggedError<ActivityUnavailable>()("ActivityUnavailable", {
-  reason: Schema.String
+  reason: Schema.String,
+  retryable: Schema.optionalWith(Schema.Boolean, { default: () => false })
 }) {}
 
 /**

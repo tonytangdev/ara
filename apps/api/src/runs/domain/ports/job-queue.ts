@@ -36,6 +36,16 @@ export class JobQueue extends Context.Tag("domain/runs/JobQueue")<
     readonly claim: Effect.Effect<Option.Option<Run>>
     /** Move a claimed Run between the pipeline's stages. */
     readonly advance: (id: RunId, state: RunState) => Effect.Effect<void>
+    /**
+     * Count another attempt at a Run this worker is still holding, and put it
+     * back at the stage it will resume from. Answers with the attempt number
+     * that has just begun.
+     *
+     * Deliberately not the same as returning the Run to `queued`: the worker
+     * has not let go of it, and a Run visible as queued while somebody is still
+     * backing off from it would be claimed twice over.
+     */
+    readonly recordAttempt: (id: RunId, resumeAt: RunState) => Effect.Effect<number>
     /** Finish a Run, one way or the other. */
     readonly complete: (id: RunId, outcome: RunOutcome) => Effect.Effect<void>
     /**
