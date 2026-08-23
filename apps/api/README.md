@@ -8,6 +8,19 @@ Module-first: each feature owns its own hexagon.
 
 ```
 src/
+  connections/                 the connections module: Users, sign-in, Forge authorization
+    api.ts                       its HTTP contract, incl. the session middleware
+    index.ts                     its public face: `ConnectionsLive`, fully wired
+    domain/
+      user.ts, session.ts, installation.ts, forge-credential.ts
+      ports/                     driven ports: repositories, `GithubAuthorization`,
+                                 `InstallationTokens`
+    application/                 one file per use case
+    infrastructure/
+      http/                        handlers + the session authentication middleware
+      github/                      GitHub App adapters (OAuth exchange, App JWT, tokens)
+      persistence/                 Postgres adapters
+      crypto/secret-cipher.ts      AES-256-GCM, used by the persistence adapters
   health/                      the health module
     api.ts                       its HTTP contract (group + DTOs) — the public surface
     index.ts                     its public face: `HealthLive`, fully wired
@@ -57,10 +70,43 @@ so a green `pnpm test` needs a Docker daemon but never `docker compose up`.
 
 ## Routes
 
-| Method | Path      | Description                                                     |
-| ------ | --------- | --------------------------------------------------------------- |
-| GET    | `/health` | `200` with the health report, `503` when a dependency is down.   |
-| GET    | `/docs`   | Scalar API reference, generated from the `HttpApi` definition.  |
+| Method | Path                              | Description                                                    |
+| ------ | --------------------------------- | -------------------------------------------------------------- |
+| GET    | `/health`                         | `200` with the health report, `503` when a dependency is down.  |
+| GET    | `/docs`                           | Scalar API reference, generated from the `HttpApi` definition. |
+| GET    | `/v1/auth/github`                 | `302` to GitHub, carrying a state cookie for the return trip.   |
+| GET    | `/v1/auth/github/callback`        | Completes sign-in and sets the session cookie.                  |
+| GET    | `/v1/auth/github/installation`    | Where GitHub sends someone after installing the App.            |
+| GET    | `/v1/me`                          | The signed-in User; `401` without a valid session.              |
+
+Everything new lives under `/v1`. `/health` stays unversioned because platform
+probes depend on the path.
+
+## Signing in
+
+Ara authorizes as a **GitHub App**, not an OAuth App
+([ADR-0005](../../docs/adr/0005-github-app-not-oauth-app.md)). Three consequences
+run through the connections module:
+
+- **Identity and access are separate.** Signing in creates a User; installing
+  the App is a second, optional act. `GET /v1/me` answers with
+  `installations: []` for someone who has done only the first, because that is a
+  complete answer rather than an error.
+- **Nothing long-lived is stored.** Installation tokens are minted from the
+  App's private key when a repository is read and refreshed before they expire;
+  they never reach a column. The user access token that *is* kept is encrypted
+  with `CREDENTIAL_ENCRYPTION_KEY`, and sessions are stored only as a digest of
+  the token the browser holds.
+- **Nothing secret reaches a log.** Credentials are `Redacted`, and request
+  logging goes through `http/logging.ts`, which replaces the `code` and `state`
+  parameters GitHub puts on the callback URL.
+- **Authorization is GitHub-shaped and stays outside the Activity port.**
+  `GithubAuthorization` and `InstallationTokens` are named for the Forge on
+  purpose; `RepoActivitySource` will ask this module for a credential rather
+  than owning one ([ADR-0003](../../docs/adr/0003-forge-agnostic-ports.md)).
+
+Local development needs a real GitHub App and a callback URL that reaches your
+machine. See `.env.example` for the four values it wants.
 
 The OpenAPI document is derived from the endpoint schemas, so documenting a new
 route means annotating it in the module's `api.ts` — nothing to keep in sync.
@@ -88,6 +134,16 @@ pnpm typecheck
 | `DATABASE_USER`     | _required_  | Database user                    |
 | `DATABASE_PASSWORD` | _required_  | Database password                |
 | `DATABASE_SSL`      | `false`     | Connect over TLS                 |
+| `GITHUB_APP_ID`     | _required_  | The GitHub App's numeric id      |
+| `GITHUB_APP_CLIENT_ID`     | _required_ | The App's client id       |
+| `GITHUB_APP_CLIENT_SECRET` | _required_ | The App's client secret   |
+| `GITHUB_APP_PRIVATE_KEY`   | _required_ | PEM, base64 or `\n`-escaped |
+| `GITHUB_API_BASE_URL` | `https://api.github.com` | GitHub's API |
+| `GITHUB_WEB_BASE_URL` | `https://github.com` | Where people sign in |
+| `CREDENTIAL_ENCRYPTION_KEY` | _required_ | 32 bytes, base64      |
+| `SESSION_LIFETIME`  | `30 days`   | How long a session lasts         |
+| `SESSION_SECURE_COOKIES` | `true` | `Secure` on the session cookie  |
+| `AFTER_SIGN_IN_URL` | `/v1/me`    | Where sign-in sends the browser  |
 
 The credentials have no defaults on purpose: an unconfigured deployment should
 fail to boot rather than quietly try a well-known password. `pnpm dev` and

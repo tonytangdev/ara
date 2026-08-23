@@ -1,12 +1,20 @@
-import { HttpApiBuilder, HttpApiClient } from "@effect/platform"
+import { HttpApi, HttpApiBuilder, HttpApiClient } from "@effect/platform"
 import { NodeHttpServer } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { AraApi } from "../../../http/api.ts"
+import { HealthApiGroup } from "../../api.ts"
 import { CheckHealth } from "../../application/check-health.ts"
 import { DependencyStatus } from "../../domain/health-report.ts"
 import { SystemProbe } from "../../domain/ports/system-probe.ts"
 import { HealthHandlersLive } from "./health-handlers.ts"
+
+/**
+ * The health module alone, served under the real API's id, so these tests need
+ * nothing from the other modules. `HealthHandlersLive` is the same layer the
+ * application uses: it registers the group by name, not by which `HttpApi`
+ * value it was handed.
+ */
+const HealthOnlyApi = HttpApi.make("ara").add(HealthApiGroup)
 
 /**
  * Real handlers, real use case; only the driven port is stubbed, so these tests
@@ -15,7 +23,7 @@ import { HealthHandlersLive } from "./health-handlers.ts"
 const serverReporting = (dependencies: ReadonlyArray<DependencyStatus>) =>
   HttpApiBuilder.serve().pipe(
     Layer.provide(
-      HttpApiBuilder.api(AraApi).pipe(
+      HttpApiBuilder.api(HealthOnlyApi).pipe(
         Layer.provide(
           HealthHandlersLive.pipe(
             Layer.provide(CheckHealth.Default),
@@ -38,7 +46,7 @@ const serverReporting = (dependencies: ReadonlyArray<DependencyStatus>) =>
 describe("GET /health", () => {
   it.effect("returns a healthy report listing each dependency", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiClient.make(AraApi)
+      const client = yield* HttpApiClient.make(HealthOnlyApi)
       const response = yield* client.health.check()
       assert.strictEqual(response.status, "healthy")
       assert.isAtLeast(response.uptimeSeconds, 0)
@@ -48,7 +56,7 @@ describe("GET /health", () => {
 
   it.effect("reports unhealthy when a dependency is unreachable", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiClient.make(AraApi)
+      const client = yield* HttpApiClient.make(HealthOnlyApi)
       const error = yield* Effect.flip(client.health.check())
       if (error._tag !== "Unhealthy") return assert.fail(`expected Unhealthy, got ${error._tag}`)
       assert.strictEqual(error.report.status, "degraded")

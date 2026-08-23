@@ -1,4 +1,4 @@
-import { HttpApiBuilder, HttpApiClient } from "@effect/platform"
+import { HttpApi, HttpApiBuilder, HttpApiClient } from "@effect/platform"
 import { NodeHttpServer } from "@effect/platform-node"
 import { SqlClient } from "@effect/sql"
 import { PgClient } from "@effect/sql-pg"
@@ -6,9 +6,16 @@ import { assert, describe, it } from "@effect/vitest"
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql"
 import { Effect, Layer, Redacted } from "effect"
 import { afterAll, beforeAll } from "vitest"
-import { AraApi } from "../http/api.ts"
-import { ApiLive } from "../http/server.ts"
+import { HealthApiGroup } from "../health/api.ts"
+import { HealthLive } from "../health/index.ts"
 import { MigrationsLive, MigrationsTable } from "./index.ts"
+
+/**
+ * What these tests drive: the health module over a real Postgres. Scoped to one
+ * module on purpose — a database that is up or down is not the other modules'
+ * story to tell, and they would drag their own configuration in with them.
+ */
+const HealthOnlyApi = HttpApi.make("ara").add(HealthApiGroup)
 
 /**
  * Testcontainers gives every run its own Postgres, so `pnpm test` never depends
@@ -35,7 +42,7 @@ const disposablePg = () =>
 
 const serverOver = <E>(database: Layer.Layer<SqlClient.SqlClient, E>) =>
   HttpApiBuilder.serve().pipe(
-    Layer.provide(ApiLive),
+    Layer.provide(HttpApiBuilder.api(HealthOnlyApi).pipe(Layer.provide(HealthLive))),
     Layer.provide(database),
     Layer.provideMerge(NodeHttpServer.layerTest)
   )
@@ -50,7 +57,7 @@ describe("Postgres", () => {
       `
       assert.deepStrictEqual(
         applied.map((row) => row.name),
-        ["schema_foundations"]
+        ["schema_foundations", "users_and_sessions"]
       )
 
       const functions = yield* sql`select proname from pg_proc where proname = 'set_updated_at'`
@@ -62,13 +69,13 @@ describe("Postgres", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       const applied = yield* sql`select name from ${sql(MigrationsTable)}`
-      assert.lengthOf(applied, 1)
+      assert.lengthOf(applied, 2)
     }).pipe(Effect.provide(MigrationsLive.pipe(Layer.provideMerge(disposablePg()))))
   )
 
   it.effect("is reported as a healthy dependency once migrated", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiClient.make(AraApi)
+      const client = yield* HttpApiClient.make(HealthOnlyApi)
       const response = yield* client.health.check()
       assert.strictEqual(response.status, "healthy")
       assert.deepStrictEqual(response.dependencies, [{ name: "database", reachable: true }])
@@ -107,7 +114,7 @@ describe("Postgres going down", () => {
 
   it.effect("turns the health report unhealthy when the database disappears", () =>
     Effect.gen(function* () {
-      const client = yield* HttpApiClient.make(AraApi)
+      const client = yield* HttpApiClient.make(HealthOnlyApi)
 
       const healthy = yield* client.health.check()
       assert.strictEqual(healthy.status, "healthy")
